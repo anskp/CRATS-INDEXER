@@ -1,0 +1,45 @@
+# ─── Node.js ──────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# ─── Environment ──────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Logs ─────────────────────────────────────────────────────
+logs/
+*.log
+pids/
+*.pid
+
+# ─── Prisma generated client ──────────────────────────────────
+# Keep: prisma/schema.prisma, prisma/migrations/
+prisma/generated/
+
+# ─── PM2 runtime ──────────────────────────────────────────────
+.pm2/
+
+# ─── Scratch / temp scripts ───────────────────────────────────
+scratch/*.output.json
+scratch/*.result.js
+
+# ─── OS ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── IDE ──────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+
+# ─── Large binary / media ─────────────────────────────────────
+*.docx
+*.jpeg
+*.jpg
+*.png
+*.zip
+W*.docx
+WhatsApp*

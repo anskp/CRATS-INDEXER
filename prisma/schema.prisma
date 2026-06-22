@@ -1,0 +1,250 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Infrastructure Models ────────────────────────────────────
+
+model BlockchainEvent {
+  eventId         BigInt   @id @default(autoincrement()) @map("event_id")
+  chainId         Int      @map("chain_id")
+  blockNumber     BigInt   @map("block_number")
+  blockHash       String   @map("block_hash")
+  parentHash      String   @map("parent_hash")
+  txHash          String   @map("tx_hash")
+  logIndex        Int      @map("log_index")
+  contractAddress String   @map("contract_address")
+  eventName       String   @map("event_name")
+  eventVersion    String   @default("1.0") @map("event_version")
+  eventPayload    Json     @map("event_payload")
+  isRemoved       Boolean  @default(false) @map("is_removed")
+  status          String   @default("pending") // pending / processing / processed / failed / reorg_removed
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@unique([txHash, logIndex])
+  @@index([status])
+  @@index([blockNumber])
+  @@index([contractAddress])
+  @@map("blockchain_events")
+}
+
+model ProcessedEvent {
+  id             Int      @id @default(autoincrement())
+  eventId        BigInt   @map("event_id")
+  projectionName String   @map("projection_name")
+  processedAt    DateTime @default(now()) @map("processed_at")
+
+  @@unique([eventId, projectionName])
+  @@map("processed_events")
+}
+
+model IndexedBlock {
+  blockNumber BigInt   @id @map("block_number")
+  blockHash   String   @map("block_hash")
+  parentHash  String   @map("parent_hash")
+  indexedAt   DateTime @default(now()) @map("indexed_at")
+  status      String   @default("synced")
+
+  @@map("indexed_blocks")
+}
+
+model ProjectionState {
+  projectionName String   @id @map("projection_name")
+  lastEventId    BigInt   @map("last_event_id")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("projection_state")
+}
+
+model DeadLetterEvent {
+  id             Int      @id @default(autoincrement())
+  eventId        BigInt   @map("event_id")
+  projectionName String   @map("projection_name")
+  errorMessage   String   @db.Text @map("error_message")
+  retryCount     Int      @default(0) @map("retry_count")
+  status         String   @default("pending") // pending / retrying / resolved / permanent_failure
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("dead_letter_events")
+}
+
+model SyncMetric {
+  id          Int      @id @default(autoincrement())
+  metricName  String   @unique @map("metric_name")
+  metricValue String   @map("metric_value")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("sync_metrics")
+}
+
+// ─── Read Model Models ────────────────────────────────────────
+
+model PortfolioPosition {
+  id                Int      @id @default(autoincrement())
+  walletAddress     String   @map("wallet_address")
+  vaultAddress      String   @map("vault_address")
+  shares            Decimal  @db.Decimal(30, 18) @map("shares")
+  lastUpdatedBlock  BigInt   @map("last_updated_block")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@unique([walletAddress, vaultAddress])
+  @@map("portfolio_positions")
+}
+
+model Vault {
+  id           Int      @id @default(autoincrement())
+  vaultAddress String   @unique @map("vault_address")
+  assetAddress String   @map("asset_address")
+  name         String   @map("name")
+  symbol       String   @map("symbol")
+  category     String   @map("category")
+  vaultType    String   @map("vault_type") // SYNC / ASYNC
+  creator      String   @map("creator")
+  tvl          Decimal  @default(0) @db.Decimal(30, 18) @map("tvl")
+  totalShares  Decimal  @default(0) @db.Decimal(30, 18) @map("total_shares")
+  active       Boolean  @default(true) @map("active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("vaults")
+}
+
+model FeeRecord {
+  id           Int      @id @default(autoincrement())
+  vaultAddress String   @map("vault_address")
+  feeType      String   @map("fee_type") // mgmt / perf / entry / exit / trading
+  amount       Decimal  @db.Decimal(30, 18) @map("amount")
+  recipient    String?  @map("recipient")
+  txHash       String   @map("tx_hash")
+  blockNumber  BigInt   @map("block_number")
+  timestamp    DateTime @map("timestamp")
+
+  @@map("fee_records")
+}
+
+model Settlement {
+  id           Int       @id @default(autoincrement())
+  vaultAddress String    @map("vault_address")
+  requestId    String    @map("request_id")
+  investor     String    @map("investor")
+  shares       Decimal   @db.Decimal(30, 18) @map("shares")
+  assets       Decimal   @db.Decimal(30, 18) @map("assets")
+  status       String    @map("status") // pending / processed / claimed / cancelled
+  requestTime  DateTime  @map("request_time")
+  settleTime   DateTime? @map("settle_time")
+  txHash       String    @map("tx_hash")
+  blockNumber  BigInt    @map("block_number")
+
+  @@unique([vaultAddress, requestId])
+  @@map("settlements")
+}
+
+model NavSubmission {
+  id            Int      @id @default(autoincrement())
+  assetId       String   @map("asset_id")
+  navValue      Decimal  @db.Decimal(30, 18) @map("nav_value")
+  method        String   @map("method")
+  submitter     String   @map("submitter")
+  status        String   @map("status") // draft / verified / submitted / published / disputed
+  valuationDate DateTime @map("valuation_date")
+  submittedAt   DateTime @map("submitted_at")
+  txHash        String   @map("tx_hash")
+  blockNumber   BigInt   @map("block_number")
+
+  @@map("nav_submissions")
+}
+
+model TokenHolder {
+  id            Int      @id @default(autoincrement())
+  tokenAddress  String   @map("token_address")
+  holderAddress String   @map("holder_address")
+  balance       Decimal  @db.Decimal(30, 18) @map("balance")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@unique([tokenAddress, holderAddress])
+  @@map("token_holders")
+}
+
+model ProtocolMetric {
+  id           Int      @id @default(autoincrement())
+  tvl          Decimal  @default(0) @db.Decimal(30, 18) @map("tvl")
+  totalFees    Decimal  @default(0) @db.Decimal(30, 18) @map("total_fees")
+  activeVaults Int      @default(0) @map("active_vaults")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("protocol_metrics")
+}
+
+model Block {
+  blockNumber BigInt   @id @map("block_number")
+  blockHash   String   @map("block_hash")
+  parentHash  String   @map("parent_hash")
+  timestamp   DateTime @map("timestamp")
+  gasUsed     BigInt   @map("gas_used")
+  txCount     Int      @map("tx_count")
+
+  @@map("blocks")
+}
+
+model Transaction {
+  txHash          String   @id @map("tx_hash")
+  blockNumber     BigInt   @map("block_number")
+  fromAddress     String   @map("from_address")
+  toAddress       String?  @map("to_address")
+  contractAddress String?  @map("contract_address")
+  method          String?  @map("method")
+  status          String   @map("status") // SUCCESS / REVERTED
+  gasUsed         BigInt   @map("gas_used")
+  gasLimit        BigInt?  @map("gas_limit")
+  value           String   @map("value") // Wei stored as String
+  gasPrice        BigInt?  @map("gas_price")
+  transactionFee  String?  @map("transaction_fee")
+  tokenName       String?  @map("token_name")
+  tokenSymbol     String?  @map("token_symbol")
+  tokenAmount     String?  @map("token_amount")
+  timestamp       DateTime @map("timestamp")
+
+  @@index([blockNumber])
+  @@index([fromAddress])
+  @@index([toAddress])
+  @@map("transactions")
+}
+
+model Log {
+  id              Int      @id @default(autoincrement())
+  txHash          String   @map("tx_hash")
+  logIndex        Int      @map("log_index")
+  address         String   @map("address")
+  topics          String   @db.Text @map("topics") // JSON array of topics
+  data            String   @db.LongText @map("data")
+  blockNumber     BigInt   @map("block_number")
+
+  @@unique([txHash, logIndex])
+  @@map("logs")
+}
+
+model SyncStatus {
+  id                 Int      @id @default(autoincrement())
+  chainId            Int      @unique @map("chain_id")
+  lastSyncedBlock    BigInt   @map("last_synced_block")
+  latestBlock        BigInt   @map("latest_block")
+  progressPercentage Decimal  @db.Decimal(5, 2) @map("progress_percentage")
+  status             String   @map("status") // idle / syncing / completed / error
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@map("sync_status")
+}
+
+model FailedBlock {
+  blockNumber BigInt   @id @map("block_number")
+  error       String   @db.Text @map("error")
+  retryCount  Int      @default(0) @map("retry_count")
+  timestamp   DateTime @default(now()) @map("timestamp")
+
+  @@map("failed_blocks")
+}

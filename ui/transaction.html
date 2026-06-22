@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Transaction Details - CRATS Blockchain Explorer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <header>
+    <div class="nav-container">
+      <a href="/dashboard.html" class="logo-link" id="header-logo">
+        <div class="logo-icon">C</div>
+        CRATS Explorer
+      </a>
+      <nav>
+        <ul>
+          <li><a href="/dashboard.html" id="nav-dashboard">Dashboard</a></li>
+          <li><a href="/blocks.html" id="nav-blocks">Blocks</a></li>
+          <li><a href="/transactions.html" class="active" id="nav-transactions">Transactions</a></li>
+          <li><a href="/contracts.html" id="nav-contracts">Contracts</a></li>
+          <li><a href="/assets.html" id="nav-assets">Assets</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <section class="search-section" style="padding: 1.5rem 1.5rem;">
+    <form class="search-form" id="search-form-tx">
+      <div class="search-bar" style="max-width: 600px;">
+        <input type="text" placeholder="Search by Wallet Address / Tx Hash / Block Number..." required id="search-input-tx">
+        <button type="submit" id="search-submit-tx">Search</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- Live Sync Bar -->
+  <div class="sync-status-bar">
+    <div class="sync-banner">
+      <div class="sync-info">
+        <div class="sync-spinner"></div>
+        <span id="sync-banner-status" style="font-weight: 500;">Syncing Block Details...</span>
+        <span style="color: var(--text-muted);">Synced Block: <span id="sync-banner-synced" style="color: var(--text-main); font-weight: 600;">0</span> of <span id="sync-banner-latest" style="color: var(--text-main); font-weight: 600;">0</span></span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <span id="sync-banner-pct" style="font-weight: 600; color: var(--primary);">0.00%</span>
+        <div class="progress-track">
+          <div class="progress-bar" id="sync-banner-bar"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <main>
+    <div class="page-header">
+      <h1 class="page-title">Transaction Details</h1>
+      <p class="page-subtitle">Receipt execution, gas consumption metrics, and emitted logs</p>
+    </div>
+
+    <!-- Container updated dynamically by app.js -->
+    <div id="tx-details-container"></div>
+  </main>
+
+  <footer>
+    <p>&copy; 2026 CRATS Protocol Indexer & Explorer. Phase 2 Production Release.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

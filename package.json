@@ -1,0 +1,28 @@
+{
+  "name": "crats-indexer",
+  "version": "3.0.0",
+  "description": "CRATS Blockchain Indexer - Phase 1 Production Release",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev --name init",
+    "prisma:studio": "prisma studio",
+    "replay": "node src/scripts/replay.js",
+    "backfill": "node src/scripts/backfill.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.10.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "viem": "^2.17.4",
+    "winston": "^3.13.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10",
+    "prisma": "^6.10.1"
+  }
+}

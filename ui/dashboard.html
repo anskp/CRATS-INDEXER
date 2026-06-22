@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="CRATS Blockchain Indexer - Decentralized Event Ledger Explorer">
+  <title>Dashboard - CRATS Blockchain Explorer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Sticky Navigation Header -->
+  <header>
+    <div class="nav-container">
+      <a href="/dashboard.html" class="logo-link" id="header-logo">
+        <div class="logo-icon">C</div>
+        CRATS Explorer
+      </a>
+      <nav>
+        <ul>
+          <li><a href="/dashboard.html" class="active" id="nav-dashboard">Dashboard</a></li>
+          <li><a href="/blocks.html" id="nav-blocks">Blocks</a></li>
+          <li><a href="/transactions.html" id="nav-transactions">Transactions</a></li>
+          <li><a href="/contracts.html" id="nav-contracts">Contracts</a></li>
+          <li><a href="/assets.html" id="nav-assets">Assets</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Global Etherscan-style Search Bar -->
+  <section class="search-section">
+    <h1 class="search-title">CRATS Sepolia Explorer</h1>
+    <p class="search-subtitle">Search and trace blocks, transactions, contract events, assets, and investor wallets on Sepolia testnet</p>
+    <form class="search-form" id="search-form-dashboard">
+      <div class="search-bar">
+        <input type="text" placeholder="Search by Wallet Address / Tx Hash / Block Number / Contract Address / Symbol..." required id="search-input-dashboard">
+        <button type="submit" id="search-submit-dashboard">Search</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- Live Sync Bar -->
+  <div class="sync-status-bar">
+    <div class="sync-banner">
+      <div class="sync-info">
+        <div class="sync-spinner"></div>
+        <span id="sync-banner-status" style="font-weight: 500;">Syncing Block Details...</span>
+        <span style="color: var(--text-muted);">Synced Block: <span id="sync-banner-synced" style="color: var(--text-main); font-weight: 600;">0</span> of <span id="sync-banner-latest" style="color: var(--text-main); font-weight: 600;">0</span></span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <span id="sync-banner-pct" style="font-weight: 600; color: var(--primary);">0.00%</span>
+        <div class="progress-track">
+          <div class="progress-bar" id="sync-banner-bar"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Content Dashboard Grid -->
+  <main>
+    <!-- Statistics Cards Grid -->
+    <div class="stats-grid">
+      <div class="stat-card" id="card-block">
+        <div class="stat-header">
+          <span>Synced Block Height</span>
+          <span style="color: var(--primary);">#</span>
+        </div>
+        <div class="stat-value" id="stat-latest-block">0</div>
+        <div class="stat-footer" id="stat-network">Sepolia Testnet</div>
+      </div>
+
+      <div class="stat-card" id="card-tx">
+        <div class="stat-header">
+          <span>Total Transactions</span>
+          <span style="color: var(--success);">TX</span>
+        </div>
+        <div class="stat-value" id="stat-total-tx">0</div>
+        <div class="stat-footer">Stored in relational model</div>
+      </div>
+
+      <div class="stat-card" id="card-contracts">
+        <div class="stat-header">
+          <span>Tracked Contracts</span>
+          <span style="color: var(--info);">CT</span>
+        </div>
+        <div class="stat-value" id="stat-total-contracts">0</div>
+        <div class="stat-footer">System registry & Clones</div>
+      </div>
+
+      <div class="stat-card" id="card-assets">
+        <div class="stat-header">
+          <span>Tokenized Assets</span>
+          <span style="color: var(--warning);">AS</span>
+        </div>
+        <div class="stat-value" id="stat-total-assets">0</div>
+        <div class="stat-footer">Asset registries</div>
+      </div>
+
+      <div class="stat-card" id="card-vaults">
+        <div class="stat-header">
+          <span>Active Vaults</span>
+          <span style="color: var(--success);">VT</span>
+        </div>
+        <div class="stat-value" id="stat-total-vaults">0</div>
+        <div class="stat-footer">Sync & Async Templates</div>
+      </div>
+
+      <div class="stat-card" id="card-events">
+        <div class="stat-header">
+          <span>Ledger Decoded Events</span>
+          <span style="color: var(--primary);">EV</span>
+        </div>
+        <div class="stat-value" id="stat-total-events">0</div>
+        <div class="stat-footer">Immutable event ledger logs</div>
+      </div>
+
+      <div class="stat-card" id="card-sync">
+        <div class="stat-header">
+          <span>Indexer Status</span>
+          <span style="color: var(--info);">SY</span>
+        </div>
+        <div class="stat-value" id="stat-sync-percentage">0.00%</div>
+        <div class="stat-footer">Progress backfilling head</div>
+      </div>
+    </div>
+
+    <!-- Dashboard Columns (Recent blocks & Recent Tx) -->
+    <div class="dashboard-columns">
+      <!-- Recent Blocks Column -->
+      <div class="column-card" id="col-recent-blocks">
+        <div class="column-header">
+          <h2 class="column-title">Latest Synced Blocks</h2>
+          <a href="/blocks.html" class="column-action" id="action-all-blocks">View all blocks</a>
+        </div>
+        <div class="feed-list" id="recent-blocks-body"></div>
+      </div>
+
+      <!-- Recent Transactions Column -->
+      <div class="column-card" id="col-recent-tx">
+        <div class="column-header">
+          <h2 class="column-title">Latest Synced Transactions</h2>
+          <a href="/transactions.html" class="column-action" id="action-all-tx">View all transactions</a>
+        </div>
+        <div class="feed-list" id="recent-tx-body"></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Sticky Footer -->
+  <footer>
+    <p>&copy; 2026 CRATS Protocol Indexer & Explorer. Phase 2 Production Release.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
