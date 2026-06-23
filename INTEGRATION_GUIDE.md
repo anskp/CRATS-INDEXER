@@ -4,7 +4,8 @@
 > **Indexer Base URL**: `http://localhost:5001` (dev) · `http://<indexer-host>:5001` (prod)  
 > **Protocol**: HTTP/1.1 REST · JSON responses  
 > **Auth**: None (internal service — secure via network/firewall, not token)  
-> **All BigInt values** (block numbers, gas, balances) are returned as **strings** to avoid JS precision loss.
+> **All block numbers, transaction values, and event IDs** are returned as **strings** (representing BigInts) to avoid JS precision loss.  
+> **Financial values** (TVL, shares, token balances, and fees) are **pre-normalized** to standard float decimals (strings) to match real-world token balances directly.
 
 ---
 
@@ -149,7 +150,7 @@ The indexer is the **single source of truth** for:
 ## 4. Full API Reference with Response Shapes
 
 All addresses in requests are case-insensitive (lowercased internally).  
-All BigInt fields (marked with `// BigInt as string`) are returned as decimal strings.
+All BigInt fields (marked with `// BigInt as string`) are returned as decimal strings. Note: Financial columns (shares, tvl, balances, fees) are returned as normalized decimal strings (e.g. `"1.5"` instead of raw wei).
 
 ---
 
@@ -712,16 +713,22 @@ if (health.syncLag > 100) {
 
 ## 6. Important Data Notes
 
-### BigInt / Number precision
-All `BigInt` values are returned as **decimal strings**. Convert with `BigInt(value)` in JS or `int(value)` in Python. Never use `parseInt()` on them — JS loses precision above 2^53.
+### BigInt vs Normalized Float Decimals
+Raw infrastructure values (like `blockNumber`, `gasUsed`, `gasPrice`, `value`, `transactionFee`) are returned as **raw BigInt decimal strings** and should be converted using `BigInt(value)`.
+However, all financial values (such as `shares`, `tvl`, `balance`, `amount` for fees and settlements) are **pre-normalized** by the indexer (e.g., divided by $10^{18}$ or $10^6$) and returned as normalized float decimal strings (like `"2.997"` or `"1.5"`). 
+
+**IMPORTANT**: Calling `BigInt()` on normalized float strings will throw a `SyntaxError` in JavaScript. You should parse them using `Number()` or a custom Decimal math library.
 
 ```javascript
-// ✅ Correct
-const shares = BigInt(position.shares);
-const humanReadable = Number(shares) / 1e18;
+// ✅ Correct for financial values (e.g., shares)
+const shares = Number(position.shares);
+console.log(`Shares: ${shares.toFixed(4)}`); // e.g. 1.5000
 
-// ❌ Wrong — loses precision for large numbers
-const shares = parseInt(position.shares);
+// ✅ Correct for transaction gas fees
+const gasFeeETH = Number(BigInt(tx.transactionFee)) / 1e18;
+
+// ❌ Wrong (throws SyntaxError)
+const shares = BigInt(position.shares); 
 ```
 
 ### Addresses are lowercase
@@ -815,13 +822,13 @@ export const indexer = {
 // 1. Get investor portfolio for a dashboard
 const positions = await indexer.portfolio('0x5537dbc19eee936a615b151c8c5983fbf735c583');
 for (const pos of positions) {
-  const sharesHuman = Number(BigInt(pos.shares)) / 1e18;
+  const sharesHuman = Number(pos.shares); // already normalized by indexer!
   console.log(`Vault: ${pos.vaultAddress} — Shares: ${sharesHuman.toFixed(4)}`);
 }
 
 // 2. Get vault TVL for a product card
 const stats = await indexer.vaultStats('0x6eda73cddfeca93d558ddcb60c5414f9fe24c6a4');
-const tvlUSD = Number(BigInt(stats.tvl)) / 1e6; // USDC is 6 decimals
+const tvlUSD = Number(stats.tvl); // TVL is already normalized in USD/USDC
 console.log(`TVL: $${tvlUSD.toLocaleString()}`);
 
 // 3. Check if a submitted transaction was confirmed
@@ -829,8 +836,8 @@ const txHash = '0x38b857159b37d04d6e7e1e5f720a24efcf68e1807096535fe607bd6e054b35
 try {
   const tx = await indexer.transaction(txHash);
   console.log(`Status: ${tx.status}`);         // SUCCESS | REVERTED
-  console.log(`Gas fee: ${Number(BigInt(tx.transactionFee)) / 1e18} ETH`);
-  console.log(`Token: ${tx.tokenName} — Amount: ${Number(BigInt(tx.tokenAmount || '0')) / 1e18}`);
+  console.log(`Gas fee: ${Number(BigInt(tx.transactionFee)) / 1e18} ETH`); // raw wei needs conversion
+  console.log(`Token: ${tx.tokenName} — Amount: ${Number(tx.tokenAmount || '0')}`); // already normalized!
 } catch (e) {
   // 404 = not yet indexed, retry after a few seconds
   console.log('Transaction not yet indexed, retry...');
@@ -840,7 +847,7 @@ try {
 const asset = await indexer.assetDetail('0x6eda73cddfeca93d558ddcb60c5414f9fe24c6a4');
 const leaderboard = asset.holders.map(h => ({
   address: h.holderAddress,
-  balance: (Number(BigInt(h.balance)) / 1e18).toFixed(2),
+  balance: Number(h.balance).toFixed(2), // already normalized!
   kyc: h.kycVerified ? '✅ Verified' : '⬜ Unverified',
   role: h.role,
   country: h.jurisdiction,
@@ -852,9 +859,15 @@ const trail = await indexer.auditPortfolio('0x5537dbc19eee936a615b151c8c5983fbf7
 const deposits = trail.filter(e => e.eventName === 'Deposit');
 const totalDeposited = deposits.reduce((acc, e) => {
   const payload = typeof e.eventPayload === 'string' ? JSON.parse(e.eventPayload) : e.eventPayload;
-  return acc + BigInt(payload.assets || '0');
-}, 0n);
-console.log(`Total deposited: ${Number(totalDeposited) / 1e6} USDC`);
+  // Note: raw events in ledger events still have raw on-chain values
+  const assetAddress = e.contractAddress.toLowerCase();
+  const isUSDC = assetAddress === process.env.USDC?.toLowerCase();
+  const isUSDT = assetAddress === process.env.USDT?.toLowerCase();
+  const assetDecimals = (isUSDC || isUSDT) ? 6 : 18;
+  const rawAssets = BigInt(payload.assets || '0');
+  return acc + Number(rawAssets) / Math.pow(10, assetDecimals);
+}, 0);
+console.log(`Total deposited: ${totalDeposited} tokens`);
 ```
 
 ---
@@ -875,18 +888,18 @@ def indexer_get(path):
 # Get all vaults
 vaults = indexer_get("/vaults")
 for v in vaults:
-    print(f"Vault: {v['name']} ({v['symbol']}) — TVL: {int(v['tvl']) / 1e6:.2f} USDC")
+    print(f"Vault: {v['name']} ({v['symbol']}) — TVL: {float(v['tvl']):.2f} USDC")
 
 # Get investor portfolio
 wallet = "0x5537dbc19eee936a615b151c8c5983fbf735c583"
 positions = indexer_get(f"/portfolio/{wallet}")
 for pos in positions:
-    shares_human = int(pos["shares"]) / 1e18
+    shares_human = float(pos["shares"])
     print(f"Vault {pos['vaultAddress']}: {shares_human:.4f} shares")
 
 # Get protocol TVL
 tvl_data = indexer_get("/protocol/tvl")
-tvl_usd = int(tvl_data["tvl"]) / 1e6
+tvl_usd = float(tvl_data["tvl"])
 print(f"Protocol TVL: ${tvl_usd:,.2f} USD")
 
 # Verify a transaction
@@ -896,7 +909,7 @@ try:
     fee_eth = int(tx["transactionFee"]) / 1e18
     print(f"Tx {tx['status']} — Fee: {fee_eth:.8f} ETH")
     if tx.get("tokenName"):
-        amount = int(tx["tokenAmount"]) / 1e18
+        amount = float(tx["tokenAmount"])
         print(f"Token: {tx['tokenName']} ({tx['tokenSymbol']}) — Amount: {amount:.4f}")
 except requests.exceptions.HTTPError as e:
     if e.response.status_code == 404:
@@ -946,11 +959,8 @@ The indexer has no rate limiting, but hammering it with sub-second requests defe
 
 | ❌ Don't | ✅ Do instead |
 |---------|--------------|
-| Query the blockchain RPC directly for reads | Use indexer REST API |
-| Call `parseInt()` on BigInt string fields | Use `BigInt(value)` |
-| Compare addresses without lowercasing | Always `.toLowerCase()` both sides |
-| Include `isRemoved: true` events in financial calculations | Filter `isRemoved === false` |
-| Store raw `shares` as JavaScript `number` | Store as `string`, convert to `BigInt` when computing |
+| Call `parseInt()` or `BigInt()` on pre-normalized float strings | Use `Number()` or `parseFloat()` |
+| Store raw `shares` as JavaScript `number` | Store as `string` representing decimal, convert to float/number when displaying |
 | Assume the indexer is always 100% synced | Check `syncLag` from `/health` before critical reads |
 | Use `/api/search` for backend lookups | Use direct endpoints (`/vaults/:id`, `/portfolio/:wallet`) |
 | Trust `portfolioValue` from `/api/wallets` as USD | It's raw share sum — convert with vault share price |

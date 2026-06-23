@@ -2,6 +2,23 @@ import prisma from '../config/db.js';
 import logger from '../config/logger.js';
 import { Decimal } from '@prisma/client/runtime/library.js';
 
+function toDecimalValue(value, decimals = 18) {
+  if (value === undefined || value === null) return new Decimal(0);
+  const div = new Decimal(10).pow(decimals);
+  let dec = new Decimal(value.toString()).div(div);
+  const maxVal = new Decimal('999999999999.999999999999999999');
+  if (dec.gt(maxVal)) {
+    logger.warn(`Value ${dec} exceeds MySQL Decimal(30, 18) range. Capping at ${maxVal}`);
+    return maxVal;
+  }
+  const minVal = new Decimal('-999999999999.999999999999999999');
+  if (dec.lt(minVal)) {
+    logger.warn(`Value ${dec} is below MySQL Decimal(30, 18) range. Capping at ${minVal}`);
+    return minVal;
+  }
+  return dec;
+}
+
 export async function projectPortfolio(event, tx) {
   const { eventName, contractAddress, eventPayload, blockNumber } = event;
   const payload = typeof eventPayload === 'string' ? JSON.parse(eventPayload) : eventPayload;
@@ -13,7 +30,7 @@ export async function projectPortfolio(event, tx) {
 
   if (eventName === 'Deposit') {
     const owner = payload.owner.toLowerCase();
-    const shares = new Decimal(payload.shares);
+    const shares = toDecimalValue(payload.shares, 18);
 
     // 1. Update Portfolio Position (Vault specific)
     if (isVaultToken) {
@@ -60,7 +77,7 @@ export async function projectPortfolio(event, tx) {
   
   else if (eventName === 'Withdraw') {
     const owner = payload.owner.toLowerCase();
-    const shares = new Decimal(payload.shares);
+    const shares = toDecimalValue(payload.shares, 18);
 
     // 1. Update Portfolio Position (Vault specific)
     if (isVaultToken) {
@@ -108,7 +125,13 @@ export async function projectPortfolio(event, tx) {
   else if (eventName === 'Transfer') {
     const from = payload.from.toLowerCase();
     const to = payload.to.toLowerCase();
-    const value = new Decimal(payload.value);
+    
+    const rawValue = payload.value || payload.amount || payload.shares;
+    if (rawValue === undefined) {
+      // Skip non-fungible transfers (e.g. ERC721 Transfer events with tokenId)
+      return;
+    }
+    const value = toDecimalValue(rawValue, isVaultToken ? 18 : 6);
 
     const isMint = from === '0x0000000000000000000000000000000000000000' || from === '0x0000000000000000000000000000000000000001';
     const isBurn = to === '0x0000000000000000000000000000000000000000' || to === '0x0000000000000000000000000000000000000001';

@@ -11,13 +11,30 @@ const valuationMethods = [
   'INCOME_STATEMENT'
 ];
 
+function toDecimalValue(value, decimals = 6) {
+  if (value === undefined || value === null) return new Decimal(0);
+  const div = new Decimal(10).pow(decimals);
+  let dec = new Decimal(value.toString()).div(div);
+  const maxVal = new Decimal('999999999999.999999999999999999');
+  if (dec.gt(maxVal)) {
+    logger.warn(`Value ${dec} exceeds MySQL Decimal(30, 18) range. Capping at ${maxVal}`);
+    return maxVal;
+  }
+  const minVal = new Decimal('-999999999999.999999999999999999');
+  if (dec.lt(minVal)) {
+    logger.warn(`Value ${dec} is below MySQL Decimal(30, 18) range. Capping at ${minVal}`);
+    return minVal;
+  }
+  return dec;
+}
+
 export async function projectNAV(event, tx) {
   const { eventName, txHash, blockNumber, eventPayload, createdAt } = event;
   const payload = typeof eventPayload === 'string' ? JSON.parse(eventPayload) : eventPayload;
 
   if (eventName === 'NAVSubmitted') {
     const assetId = payload.assetId;
-    const navValue = new Decimal(payload.navValue || payload.assetValue);
+    const navValue = toDecimalValue(payload.navValue || payload.assetValue, 18);
     const valuationDate = payload.valuationDate
       ? new Date(Number(payload.valuationDate) * 1000)
       : createdAt;

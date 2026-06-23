@@ -6,421 +6,410 @@ import { isTracked, decodeLog, registerContract, initializeABIRegistry } from '.
 import * as ABIs from '../config/contractABIs.js';
 import { Decimal } from '@prisma/client/runtime/library.js';
 
-// Configuration
 const CHAIN_ID = Number(process.env.CHAIN_ID || 11155111);
-const DEFAULT_START_BLOCK = BigInt(process.env.START_BLOCK || 11115300);
-const BATCH_SIZE = 100; // Scan 100 blocks per batch
-const CONCURRENCY_LIMIT = 5; // Max parallel RPC receipt calls
+const DEFAULT_START_BLOCK = BigInt(process.env.START_BLOCK || 11036800);
+const CHUNK_SIZE = 2000n; // Scan 2000 blocks at a time to prevent gateway timeouts
 
 // Helper to delay execution
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Helper to fetch transaction receipts with retry logic
-async function fetchReceiptWithRetry(txHash, retries = 3, delayMs = 1000) {
+// RPC Request wrapper with exponential backoff for rate limits and timeouts
+async function callWithRetry(fn, retries = 5, delayMs = 1500) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const receipt = await publicClient.getTransactionReceipt({ hash: txHash });
-      return receipt;
+      return await fn();
     } catch (error) {
-      if (attempt === retries) throw error;
-      logger.warn(`Failed to fetch receipt for ${txHash} (Attempt ${attempt}/${retries}): ${error.message}`);
-      await sleep(delayMs * attempt);
-    }
-  }
-}
-
-// Optimized block receipt fetcher using eth_getBlockReceipts with graceful fallback
-async function fetchBlockReceipts(blockNum, transactions) {
-  try {
-    const blockNumHex = '0x' + blockNum.toString(16);
-    const rawReceipts = await publicClient.request({
-      method: 'eth_getBlockReceipts',
-      params: [blockNumHex]
-    });
-
-    const results = {};
-    for (const receipt of rawReceipts) {
-      const txHash = receipt.transactionHash;
-      results[txHash] = {
-        status: receipt.status === '0x1' ? 'SUCCESS' : 'REVERTED',
-        gasUsed: BigInt(receipt.gasUsed),
-        gasPrice: receipt.effectiveGasPrice ? BigInt(receipt.effectiveGasPrice) : 0n,
-        logs: (receipt.logs || []).map(log => ({
-          ...log,
-          logIndex: parseInt(log.logIndex, 16),
-          blockNumber: BigInt(log.blockNumber)
-        }))
-      };
-    }
-    return results;
-  } catch (error) {
-    logger.warn(`eth_getBlockReceipts failed for block ${blockNum}: ${error.message}. Falling back to individual queries.`);
-    const results = {};
-    const queue = [...transactions];
-    
-    const worker = async () => {
-      while (queue.length > 0) {
-        const tx = queue.shift();
-        if (!tx) break;
-        try {
-          const receipt = await fetchReceiptWithRetry(tx.hash);
-          results[tx.hash] = {
-            status: receipt.status === 'success' ? 'SUCCESS' : 'REVERTED',
-            gasUsed: receipt.gasUsed,
-            gasPrice: receipt.effectiveGasPrice ? BigInt(receipt.effectiveGasPrice) : 0n,
-            logs: receipt.logs
-          };
-        } catch (err) {
-          logger.error(`Permanent failure fetching receipt for tx ${tx.hash}: ${err.message}`);
-          throw err;
-        }
+      const errorStr = error.message || '';
+      const isRetryable = errorStr.includes('429') || 
+                          errorStr.includes('Too Many Requests') || 
+                          errorStr.includes('Too many request') || 
+                          errorStr.includes('LimitExceeded') ||
+                          errorStr.includes('rate limit') ||
+                          errorStr.includes('timeout') ||
+                          errorStr.includes('Timeout') ||
+                          errorStr.includes('limit');
+      
+      if (isRetryable && attempt < retries) {
+        const waitTime = delayMs * Math.pow(2, attempt - 1);
+        logger.warn(`RPC Transient error / rate limit encountered: "${errorStr.substring(0, 80)}". Retrying in ${waitTime}ms... (Attempt ${attempt}/${retries})`);
+        await sleep(waitTime);
+        continue;
       }
-    };
-
-    // Start concurrent workers
-    const workers = Array(Math.min(CONCURRENCY_LIMIT, transactions.length))
-      .fill(null)
-      .map(() => worker());
-
-    await Promise.all(workers);
-    return results;
+      throw error;
+    }
   }
 }
 
-// Main backfill engine
 async function main() {
   logger.info('====================================================');
-  logger.info('   CRATS Blockchain Indexer - Starting Backfill    ');
+  logger.info('   CRATS Blockchain Indexer - Fast Event Backfill   ');
   logger.info('====================================================');
 
   try {
     await prisma.$connect();
     initializeABIRegistry();
 
-    // Load and register existing vaults
-    const existingVaults = await prisma.vault.findMany({
-      select: { vaultAddress: true, vaultType: true }
-    });
-    for (const vault of existingVaults) {
-      const abi = vault.vaultType === 'SYNC' ? ABIs.SyncVaultABI : ABIs.AsyncVaultABI;
-      const label = vault.vaultType === 'SYNC' ? 'SyncVault' : 'AsyncVault';
-      registerContract(vault.vaultAddress, abi, label);
+    // 1. Resolve starting list of contract addresses
+    const staticAddresses = [
+      process.env.IDENTITY_REGISTRY,
+      process.env.IDENTITY_SBT,
+      process.env.KYC_REGISTRY,
+      process.env.COMPLIANCE_MODULE,
+      process.env.TRAVEL_RULE_MODULE,
+      process.env.INVESTOR_RIGHTS_REGISTRY,
+      process.env.CIRCUIT_BREAKER,
+      process.env.ASSET_FACTORY,
+      process.env.ASSET_REGISTRY,
+      process.env.REAL_ESTATE_PLUGIN,
+      process.env.VAULT_FACTORY,
+      process.env.YIELD_DISTRIBUTOR,
+      process.env.USDC,
+      process.env.USDT,
+      process.env.FEE_ENGINE,
+      process.env.NAV_ORACLE,
+      process.env.PRICE_ORACLE,
+      process.env.MARKETPLACE_FACTORY,
+      process.env.ORDER_BOOK_ENGINE,
+      process.env.SETTLEMENT_ENGINE,
+      process.env.CLEARING_HOUSE,
+      process.env.TIMELOCK,
+      process.env.REDEMPTION_MANAGER
+    ].filter(Boolean).map(a => a.toLowerCase());
+
+    const addressesToQuery = new Set(staticAddresses);
+
+    // Load any existing vaults in the DB to make sure they are in ABI registry and queried
+    const existingVaults = await prisma.vault.findMany({ select: { vaultAddress: true, vaultType: true } });
+    for (const v of existingVaults) {
+      const cleanAddr = v.vaultAddress.toLowerCase();
+      const abi = v.vaultType === 'SYNC' ? ABIs.SyncVaultABI : ABIs.AsyncVaultABI;
+      const label = v.vaultType === 'SYNC' ? 'SyncVault' : 'AsyncVault';
+      registerContract(cleanAddr, abi, label);
+      addressesToQuery.add(cleanAddr);
     }
 
-    // Initialize or read sync status
-    let syncRecord = await prisma.syncStatus.findUnique({
-      where: { chainId: CHAIN_ID }
-    });
-
-    let startBlock = DEFAULT_START_BLOCK;
-    if (syncRecord) {
-      startBlock = syncRecord.lastSyncedBlock + 1n;
-      logger.info(`Resuming backfill from block ${startBlock} (Last synced: ${syncRecord.lastSyncedBlock})`);
-    } else {
-      syncRecord = await prisma.syncStatus.create({
-        data: {
-          chainId: CHAIN_ID,
-          lastSyncedBlock: DEFAULT_START_BLOCK - 1n,
-          latestBlock: DEFAULT_START_BLOCK,
-          progressPercentage: new Decimal(0),
-          status: 'idle'
-        }
-      });
-      logger.info(`Starting new backfill process from block ${startBlock}`);
-    }
-
-    // Get current network block head
-    const latestBlock = await publicClient.getBlockNumber();
-    logger.info(`Sepolia network block head: ${latestBlock}`);
-
-    if (startBlock > latestBlock) {
-      logger.info('Database is already fully synchronized to the blockchain head.');
-      return;
-    }
+    const currentBlock = await callWithRetry(() => publicClient.getBlockNumber());
+    logger.info(`Sepolia network block head: ${currentBlock}`);
+    logger.info(`Scanning block range: ${DEFAULT_START_BLOCK} → ${currentBlock} for ${addressesToQuery.size} addresses`);
 
     // Update status to syncing
-    await prisma.syncStatus.update({
+    await prisma.syncStatus.upsert({
       where: { chainId: CHAIN_ID },
-      data: { status: 'syncing', latestBlock }
+      create: {
+        chainId: CHAIN_ID,
+        lastSyncedBlock: DEFAULT_START_BLOCK - 1n,
+        latestBlock: currentBlock,
+        progressPercentage: new Decimal(0),
+        status: 'syncing'
+      },
+      update: { status: 'syncing', latestBlock: currentBlock }
     });
 
-    let currentBlock = startBlock;
+    let start = DEFAULT_START_BLOCK;
 
-    while (currentBlock <= latestBlock) {
-      const batchEnd = currentBlock + BigInt(BATCH_SIZE) - 1n;
-      const endOfRange = batchEnd > latestBlock ? latestBlock : batchEnd;
+    while (start <= currentBlock) {
+      let end = start + CHUNK_SIZE - 1n;
+      if (end > currentBlock) end = currentBlock;
 
-      logger.info(`Processing batch: blocks ${currentBlock} to ${endOfRange}...`);
+      const percent = ((Number(end - DEFAULT_START_BLOCK) / Number(currentBlock - DEFAULT_START_BLOCK)) * 100).toFixed(1);
+      logger.info(`Scanning blocks ${start} → ${end} (${percent}% scanned, tracking ${addressesToQuery.size} addresses)...`);
 
-      const blockQueue = [];
-      for (let blockNum = currentBlock; blockNum <= endOfRange; blockNum++) {
-        blockQueue.push(blockNum);
-      }
+      const logs = await callWithRetry(() => publicClient.getLogs({
+        address: Array.from(addressesToQuery),
+        fromBlock: start,
+        toBlock: end
+      }));
 
-      const processBlock = async (blockNum) => {
-        let blockData = null;
-        let receipts = {};
+      if (logs.length > 0) {
+        logger.info(`Found ${logs.length} logs in block range ${start} → ${end}`);
 
-        try {
-          // Fetch block with transactions
-          blockData = await publicClient.getBlock({
-            blockNumber: blockNum,
-            includeTransactions: true
-          });
-
-          // Fetch receipts for all transactions in this block
-          if (blockData.transactions.length > 0) {
-            receipts = await fetchBlockReceipts(blockNum, blockData.transactions);
-          }
-        } catch (error) {
-          logger.error(`Error processing block ${blockNum}: ${error.message}`);
-          
-          // Log failed block to failed_blocks table
-          await prisma.failedBlock.upsert({
-            where: { blockNumber: blockNum },
-            create: {
-              blockNumber: blockNum,
-              error: error.message,
-              retryCount: 1
-            },
-            update: {
-              error: error.message,
-              retryCount: { increment: 1 },
-              timestamp: new Date()
-            }
-          });
-
-          // Set sync status to error
-          await prisma.syncStatus.update({
-            where: { chainId: CHAIN_ID },
-            data: { status: 'error' }
-          });
-
-          throw error;
+        // Group logs by block number so we can write block/transactions atomically
+        const blockGroups = {};
+        for (const log of logs) {
+          const blockNum = Number(log.blockNumber);
+          if (!blockGroups[blockNum]) blockGroups[blockNum] = [];
+          blockGroups[blockNum].push(log);
         }
 
-        // Commit block, transactions, logs, and events to database in a single transaction
-        await prisma.$transaction(async (tx) => {
-          // 1. Create Block record
-          await tx.block.upsert({
-            where: { blockNumber: blockNum },
-            create: {
-              blockNumber: blockNum,
-              blockHash: blockData.hash,
-              parentHash: blockData.parentHash,
-              timestamp: new Date(Number(blockData.timestamp) * 1000),
-              gasUsed: blockData.gasUsed,
-              txCount: blockData.transactions.length
-            },
-            update: {
-              blockHash: blockData.hash,
-              parentHash: blockData.parentHash,
-              timestamp: new Date(Number(blockData.timestamp) * 1000),
-              gasUsed: blockData.gasUsed,
-              txCount: blockData.transactions.length
-            }
-          });
+        // Process each block sequentially
+        const blockNums = Object.keys(blockGroups).map(Number).sort((a, b) => a - b);
+        for (const blockNum of blockNums) {
+          const blockLogs = blockGroups[blockNum];
+          logger.info(`Processing block #${blockNum} with ${blockLogs.length} events...`);
 
-           // 2. Process Transactions and Logs
-          for (const rawTx of blockData.transactions) {
-            const receipt = receipts[rawTx.hash] || { status: 'SUCCESS', gasUsed: 0n, gasPrice: 0n, logs: [] };
-            const gasPrice = receipt.gasPrice || rawTx.gasPrice || 0n;
-            const transactionFee = (receipt.gasUsed * gasPrice).toString();
-            const gasLimit = rawTx.gas ? BigInt(rawTx.gas) : null;
+          // Fetch block details
+          const blockData = await callWithRetry(() => publicClient.getBlock({
+            blockNumber: BigInt(blockNum),
+            includeTransactions: true
+          }));
 
-            let tokenName = null;
-            let tokenSymbol = null;
-            let tokenAmount = null;
+          // Fetch receipts of only the transactions that emitted our logs
+          const txHashes = Array.from(new Set(blockLogs.map(l => l.transactionHash)));
+          const receipts = {};
 
-            for (const log of receipt.logs) {
-              if (isTracked(log.address)) {
-                const decoded = decodeLog(log);
-                if (decoded && ['Transfer', 'Deposit', 'Withdraw'].includes(decoded.eventName)) {
-                  const cleanAddr = log.address.toLowerCase();
-                  if (cleanAddr === process.env.USDC?.toLowerCase()) {
-                    tokenName = 'USD Coin';
-                    tokenSymbol = 'USDC';
-                  } else if (cleanAddr === process.env.USDT?.toLowerCase()) {
-                    tokenName = 'Tether USD';
-                    tokenSymbol = 'USDT';
-                  } else {
-                    const dbVault = await tx.vault.findUnique({
-                      where: { vaultAddress: cleanAddr }
-                    });
-                    if (dbVault) {
-                      tokenName = dbVault.name;
-                      tokenSymbol = dbVault.symbol;
-                    } else {
-                      tokenName = decoded.contractLabel || 'Unknown Vault';
-                      tokenSymbol = decoded.contractLabel || 'VAULT';
-                    }
-                  }
-                  
-                  if (decoded.args) {
-                    const rawAmount = decoded.args.value || decoded.args.shares || decoded.args.amount || decoded.args.assets;
-                    if (rawAmount !== undefined && rawAmount !== null) {
-                      tokenAmount = rawAmount.toString();
-                    }
-                  }
-                  break; // Found the primary token operation log for this transaction
-                }
-              }
-            }
+          for (const txHash of txHashes) {
+            const receipt = await callWithRetry(() => publicClient.getTransactionReceipt({ hash: txHash }));
+            receipts[txHash] = {
+              status: receipt.status === 'success' ? 'SUCCESS' : 'REVERTED',
+              gasUsed: receipt.gasUsed,
+              gasPrice: receipt.effectiveGasPrice ? BigInt(receipt.effectiveGasPrice) : 0n,
+              logs: receipt.logs
+            };
+          }
 
-            // Save Transaction
-            await tx.transaction.upsert({
-              where: { txHash: rawTx.hash },
+          // Save block, transactions, logs and events atomically
+          await prisma.$transaction(async (tx) => {
+            // 1. Create Block record
+            await tx.block.upsert({
+              where: { blockNumber: BigInt(blockNum) },
               create: {
-                txHash: rawTx.hash,
-                blockNumber: blockNum,
-                fromAddress: rawTx.from.toLowerCase(),
-                toAddress: rawTx.to ? rawTx.to.toLowerCase() : null,
-                contractAddress: rawTx.to ? null : (rawTx.contractAddress || null),
-                method: rawTx.input && rawTx.input !== '0x' ? rawTx.input.substring(0, 10) : 'Transfer',
-                status: receipt.status,
-                gasUsed: receipt.gasUsed,
-                gasLimit: gasLimit,
-                value: rawTx.value.toString(),
-                gasPrice: gasPrice,
-                transactionFee: transactionFee,
-                tokenName: tokenName,
-                tokenSymbol: tokenSymbol,
-                tokenAmount: tokenAmount,
-                timestamp: new Date(Number(blockData.timestamp) * 1000)
+                blockNumber: BigInt(blockNum),
+                blockHash: blockData.hash,
+                parentHash: blockData.parentHash,
+                timestamp: new Date(Number(blockData.timestamp) * 1000),
+                gasUsed: blockData.gasUsed,
+                txCount: blockData.transactions.length
               },
               update: {
-                status: receipt.status,
-                gasUsed: receipt.gasUsed,
-                gasLimit: gasLimit,
-                value: rawTx.value.toString(),
-                gasPrice: gasPrice,
-                transactionFee: transactionFee,
-                tokenName: tokenName,
-                tokenSymbol: tokenSymbol,
-                tokenAmount: tokenAmount
+                blockHash: blockData.hash,
+                parentHash: blockData.parentHash,
+                timestamp: new Date(Number(blockData.timestamp) * 1000)
               }
             });
 
-            // Save Raw Logs and filter/decode for Ledger events
-            for (const log of receipt.logs) {
-              // Save raw log
-              await tx.log.upsert({
-                where: {
-                  txHash_logIndex: {
-                    txHash: log.transactionHash,
-                    logIndex: log.logIndex
+            // 1b. Create IndexedBlock record
+            await tx.indexedBlock.upsert({
+              where: { blockNumber: BigInt(blockNum) },
+              create: {
+                blockNumber: BigInt(blockNum),
+                blockHash: blockData.hash,
+                parentHash: blockData.parentHash,
+                status: 'synced'
+              },
+              update: {
+                blockHash: blockData.hash,
+                parentHash: blockData.parentHash,
+                status: 'synced'
+              }
+            });
+
+            // 2. Save Transactions and Logs
+            for (const txHash of txHashes) {
+              const rawTx = blockData.transactions.find(t => t.hash === txHash);
+              if (!rawTx) continue;
+
+              const receipt = receipts[txHash];
+              const gasPrice = receipt.gasPrice || rawTx.gasPrice || 0n;
+              const transactionFee = (receipt.gasUsed * gasPrice).toString();
+              const gasLimit = rawTx.gas ? BigInt(rawTx.gas) : null;
+
+              let tokenName = null;
+              let tokenSymbol = null;
+              let tokenAmount = null;
+
+              for (const log of receipt.logs) {
+                if (isTracked(log.address)) {
+                  const decoded = decodeLog(log);
+                  if (decoded && ['Transfer', 'Deposit', 'Withdraw'].includes(decoded.eventName)) {
+                    const cleanAddr = log.address.toLowerCase();
+                    if (cleanAddr === process.env.USDC?.toLowerCase()) {
+                      tokenName = 'USD Coin';
+                      tokenSymbol = 'USDC';
+                    } else if (cleanAddr === process.env.USDT?.toLowerCase()) {
+                      tokenName = 'Tether USD';
+                      tokenSymbol = 'USDT';
+                    } else {
+                      const dbVault = await tx.vault.findUnique({
+                        where: { vaultAddress: cleanAddr }
+                      });
+                      if (dbVault) {
+                        tokenName = dbVault.name;
+                        tokenSymbol = dbVault.symbol;
+                      } else {
+                        tokenName = decoded.contractLabel || 'Unknown Vault';
+                        tokenSymbol = decoded.contractLabel || 'VAULT';
+                      }
+                    }
+
+                    if (decoded.args) {
+                      const rawAmount = decoded.args.value || decoded.args.shares || decoded.args.amount || decoded.args.assets;
+                      if (rawAmount !== undefined && rawAmount !== null) {
+                        tokenAmount = rawAmount.toString();
+                      }
+                    }
+                    break;
                   }
-                },
+                }
+              }
+
+              // Save Transaction
+              await tx.transaction.upsert({
+                where: { txHash },
                 create: {
-                  txHash: log.transactionHash,
-                  logIndex: log.logIndex,
-                  address: log.address.toLowerCase(),
-                  topics: JSON.stringify(log.topics),
-                  data: log.data,
-                  blockNumber: blockNum
+                  txHash,
+                  blockNumber: BigInt(blockNum),
+                  fromAddress: rawTx.from.toLowerCase(),
+                  toAddress: rawTx.to ? rawTx.to.toLowerCase() : null,
+                  contractAddress: rawTx.to ? null : (rawTx.contractAddress || null),
+                  method: rawTx.input && rawTx.input !== '0x' ? rawTx.input.substring(0, 10) : 'Transfer',
+                  status: receipt.status,
+                  gasUsed: receipt.gasUsed,
+                  gasLimit,
+                  value: rawTx.value.toString(),
+                  gasPrice,
+                  transactionFee,
+                  tokenName,
+                  tokenSymbol,
+                  tokenAmount,
+                  timestamp: new Date(Number(blockData.timestamp) * 1000)
                 },
                 update: {
-                  address: log.address.toLowerCase(),
-                  topics: JSON.stringify(log.topics),
-                  data: log.data
+                  status: receipt.status,
+                  gasUsed: receipt.gasUsed,
+                  tokenName,
+                  tokenSymbol,
+                  tokenAmount
                 }
               });
 
-              // Check if the log is emitted by a tracked contract
-              if (isTracked(log.address)) {
-                const decoded = decodeLog(log);
-                if (decoded) {
-                  const eventPayload = JSON.stringify(decoded.args, (k, v) => 
-                    typeof v === 'bigint' ? v.toString() : v
-                  );
-                  
-                  await tx.blockchainEvent.upsert({
-                    where: {
-                      txHash_logIndex: {
-                        txHash: log.transactionHash,
-                        logIndex: log.logIndex
-                      }
-                    },
-                    create: {
-                      chainId: CHAIN_ID,
-                      blockNumber: blockNum,
-                      blockHash: blockData.hash,
-                      parentHash: blockData.parentHash,
+              // Save Logs & Events
+              for (const log of receipt.logs) {
+                await tx.log.upsert({
+                  where: {
+                    txHash_logIndex: {
                       txHash: log.transactionHash,
-                      logIndex: log.logIndex,
-                      contractAddress: log.address,
-                      eventName: decoded.eventName,
-                      eventPayload: eventPayload,
-                      status: 'pending',
-                      isRemoved: false
-                    },
-                    update: {
-                      eventName: decoded.eventName,
-                      eventPayload: eventPayload,
-                      status: 'pending',
-                      isRemoved: false
+                      logIndex: log.logIndex
                     }
-                  });
+                  },
+                  create: {
+                    txHash: log.transactionHash,
+                    logIndex: log.logIndex,
+                    address: log.address.toLowerCase(),
+                    topics: JSON.stringify(log.topics),
+                    data: log.data,
+                    blockNumber: BigInt(blockNum)
+                  },
+                  update: {
+                    address: log.address.toLowerCase(),
+                    topics: JSON.stringify(log.topics),
+                    data: log.data
+                  }
+                });
 
-                  logger.info(`Ingested Backfill Event: ${decoded.eventName} from ${decoded.contractLabel} (${log.transactionHash} @ Log ${log.logIndex})`);
+                if (isTracked(log.address)) {
+                  const decoded = decodeLog(log);
+                  if (decoded) {
+                    const eventPayload = JSON.stringify(decoded.args, (k, v) => 
+                      typeof v === 'bigint' ? v.toString() : v
+                    );
 
-                  // Dynamic discovery of new vaults
-                  if (decoded.eventName === 'VaultCreated') {
-                    const vaultAddress = decoded.args.vault || decoded.args.vaultAddress;
-                    const vaultTypeRaw = decoded.args.vaultType;
-                    if (vaultAddress) {
-                      const abi = vaultTypeRaw === 0 ? ABIs.SyncVaultABI : ABIs.AsyncVaultABI;
-                      const label = vaultTypeRaw === 0 ? 'SyncVault' : 'AsyncVault';
-                      registerContract(vaultAddress, abi, label);
+                    await tx.blockchainEvent.upsert({
+                      where: {
+                        txHash_logIndex: {
+                          txHash: log.transactionHash,
+                          logIndex: log.logIndex
+                        }
+                      },
+                      create: {
+                        chainId: CHAIN_ID,
+                        blockNumber: BigInt(blockNum),
+                        blockHash: blockData.hash,
+                        parentHash: blockData.parentHash,
+                        txHash: log.transactionHash,
+                        logIndex: log.logIndex,
+                        contractAddress: log.address,
+                        eventName: decoded.eventName,
+                        eventPayload,
+                        status: 'pending',
+                        isRemoved: false
+                      },
+                      update: {
+                        eventName: decoded.eventName,
+                        eventPayload,
+                        status: 'pending',
+                        isRemoved: false
+                      }
+                    });
+
+                    logger.info(`   - Decoded and Ingested: ${decoded.eventName}`);
+
+                    // Dynamic vault discovery
+                    if (decoded.eventName === 'VaultCreated') {
+                      const vaultAddress = (decoded.args.vault || decoded.args.vaultAddress)?.toLowerCase();
+                      const vaultTypeRaw = decoded.args.vaultType;
+                      if (vaultAddress && !addressesToQuery.has(vaultAddress)) {
+                        logger.info(`   * Discovered new vault dynamically: ${vaultAddress}`);
+                        const abi = vaultTypeRaw === 0 ? ABIs.SyncVaultABI : ABIs.AsyncVaultABI;
+                        const label = vaultTypeRaw === 0 ? 'SyncVault' : 'AsyncVault';
+                        registerContract(vaultAddress, abi, label);
+                        addressesToQuery.add(vaultAddress);
+
+                        // Mini-scan the newly discovered vault for the remainder of this chunk
+                        if (BigInt(blockNum) < end) {
+                          logger.info(`   * Mini-scanning new vault ${vaultAddress} from block ${blockNum} to ${end}...`);
+                          const miniLogs = await callWithRetry(() => publicClient.getLogs({
+                            address: vaultAddress,
+                            fromBlock: BigInt(blockNum),
+                            toBlock: end
+                          }));
+                          if (miniLogs.length > 0) {
+                            logger.info(`   * Found ${miniLogs.length} additional logs for dynamic vault ${vaultAddress}`);
+                            for (const miniLog of miniLogs) {
+                              const miniBlockNum = Number(miniLog.blockNumber);
+                              if (miniBlockNum > blockNum) {
+                                if (!blockGroups[miniBlockNum]) {
+                                  blockGroups[miniBlockNum] = [];
+                                }
+                                const exists = blockGroups[miniBlockNum].some(l => l.transactionHash === miniLog.transactionHash && l.logIndex === miniLog.logIndex);
+                                if (!exists) {
+                                  blockGroups[miniBlockNum].push(miniLog);
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
                     }
                   }
                 }
               }
             }
-          }
-
-          // Clear failure records if previously failed block is now indexed successfully
-          await tx.failedBlock.deleteMany({
-            where: { blockNumber: blockNum }
           });
-        }, {
-          timeout: 30000
+        }
+      }
+
+      // Update progress status occasionally
+      if (start % (CHUNK_SIZE * 5n) === 0n || start + CHUNK_SIZE > currentBlock) {
+        await prisma.syncStatus.update({
+          where: { chainId: CHAIN_ID },
+          data: {
+            lastSyncedBlock: end,
+            progressPercentage: new Decimal(percent),
+            latestBlock: currentBlock
+          }
         });
-      };
+      }
 
-      const blockWorker = async () => {
-        while (blockQueue.length > 0) {
-          const blockNum = blockQueue.shift();
-          if (blockNum === undefined) break;
-          await processBlock(blockNum);
-        }
-      };
-
-      // Process blocks concurrently
-      const BLOCK_CONCURRENCY = 5;
-      const workers = Array(Math.min(BLOCK_CONCURRENCY, blockQueue.length))
-        .fill(null)
-        .map(() => blockWorker());
-
-      await Promise.all(workers);
-
-      // Update progress record at database level on batch completion
-      const progress = latestBlock > DEFAULT_START_BLOCK 
-        ? new Decimal(Number(endOfRange - DEFAULT_START_BLOCK + 1n) / Number(latestBlock - DEFAULT_START_BLOCK + 1n) * 100).toFixed(2)
-        : '100.00';
-
-      await prisma.syncStatus.update({
-        where: { chainId: CHAIN_ID },
-        data: {
-          lastSyncedBlock: endOfRange,
-          progressPercentage: new Decimal(progress),
-          status: endOfRange >= latestBlock ? 'completed' : 'syncing'
-        }
-      });
-
-      logger.info(`Batch complete! Synced up to block ${endOfRange} (${progress}% completed).`);
-      currentBlock = endOfRange + 1n;
+      start = end + 1n;
+      // Pause 100ms between calls to avoid rate limiting
+      await sleep(100);
     }
+
+    // Set sync status to completed and index status to chain head
+    await prisma.syncStatus.update({
+      where: { chainId: CHAIN_ID },
+      data: {
+        lastSyncedBlock: currentBlock,
+        progressPercentage: new Decimal('100.00'),
+        status: 'completed'
+      }
+    });
+    // Seed/Update SyncMetric
+    await prisma.syncMetric.upsert({
+      where: { metricName: 'current_indexed_block' },
+      create: { metricName: 'current_indexed_block', metricValue: currentBlock.toString() },
+      update: { metricValue: currentBlock.toString() }
+    });
 
     logger.info('====================================================');
     logger.info('   CRATS Blockchain Explorer - Backfill Completed   ');

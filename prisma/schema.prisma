@@ -134,11 +134,13 @@ model Settlement {
   investor     String    @map("investor")
   shares       Decimal   @db.Decimal(30, 18) @map("shares")
   assets       Decimal   @db.Decimal(30, 18) @map("assets")
-  status       String    @map("status") // pending / processed / claimed / cancelled
+  status       String    @map("status") // pending / processed / claimed / cancelled / completed / failed
+  failReason   String?   @db.Text @map("fail_reason")
   requestTime  DateTime  @map("request_time")
   settleTime   DateTime? @map("settle_time")
   txHash       String    @map("tx_hash")
   blockNumber  BigInt    @map("block_number")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
 
   @@unique([vaultAddress, requestId])
   @@map("settlements")
@@ -203,7 +205,7 @@ model Transaction {
   gasLimit        BigInt?  @map("gas_limit")
   value           String   @map("value") // Wei stored as String
   gasPrice        BigInt?  @map("gas_price")
-  transactionFee  String?  @map("transaction_fee")
+  transactionFee  String?  @db.VarChar(255) @map("transaction_fee")
   tokenName       String?  @map("token_name")
   tokenSymbol     String?  @map("token_symbol")
   tokenAmount     String?  @map("token_amount")
@@ -221,7 +223,7 @@ model Log {
   logIndex        Int      @map("log_index")
   address         String   @map("address")
   topics          String   @db.Text @map("topics") // JSON array of topics
-  data            String   @db.LongText @map("data")
+  data            String?  @db.LongText @map("data")
   blockNumber     BigInt   @map("block_number")
 
   @@unique([txHash, logIndex])

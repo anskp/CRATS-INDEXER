@@ -31,10 +31,11 @@ function setCache(key, data) {
   cache.set(key, { data, timestamp: Date.now() });
 }
 
-// Helper to serialize BigInt for JSON responses
+// Helper to serialize BigInt and Date for JSON responses
 function serializeBigInts(value) {
   if (value === null || value === undefined) return value;
   if (typeof value === 'bigint') return value.toString();
+  if (value instanceof Date) return value.toISOString();   // ← Date guard MUST come before object check
   if (Array.isArray(value)) return value.map(serializeBigInts);
   if (typeof value === 'object') {
     return Object.fromEntries(
@@ -908,6 +909,257 @@ app.get('/api/sync-status', async (req, res) => {
       status: syncStatus ? syncStatus.status : 'idle',
       updatedAt: syncStatus ? syncStatus.updatedAt : new Date()
     }));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Contract Label Resolver ─────────────────────────────────
+
+function buildContractLabelMap() {
+  return {
+    [process.env.IDENTITY_REGISTRY?.toLowerCase()]:       'IdentityRegistry',
+    [process.env.IDENTITY_SBT?.toLowerCase()]:            'IdentitySBT',
+    [process.env.KYC_REGISTRY?.toLowerCase()]:            'KYCRegistry',
+    [process.env.COMPLIANCE_MODULE?.toLowerCase()]:        'ComplianceModule',
+    [process.env.TRAVEL_RULE_MODULE?.toLowerCase()]:       'TravelRuleModule',
+    [process.env.INVESTOR_RIGHTS_REGISTRY?.toLowerCase()]: 'InvestorRightsRegistry',
+    [process.env.CIRCUIT_BREAKER?.toLowerCase()]:          'CircuitBreaker',
+    [process.env.ASSET_FACTORY?.toLowerCase()]:            'AssetFactory',
+    [process.env.ASSET_REGISTRY?.toLowerCase()]:           'AssetRegistry',
+    [process.env.REAL_ESTATE_PLUGIN?.toLowerCase()]:       'RealEstatePlugin',
+    [process.env.VAULT_FACTORY?.toLowerCase()]:            'VaultFactory',
+    [process.env.YIELD_DISTRIBUTOR?.toLowerCase()]:        'YieldDistributor',
+    [process.env.FEE_ENGINE?.toLowerCase()]:               'FeeEngine',
+    [process.env.NAV_ORACLE?.toLowerCase()]:               'NAVOracle',
+    [process.env.PRICE_ORACLE?.toLowerCase()]:             'PriceOracle',
+    [process.env.MARKETPLACE_FACTORY?.toLowerCase()]:      'MarketplaceFactory',
+    [process.env.ORDER_BOOK_ENGINE?.toLowerCase()]:        'OrderBookEngine',
+    [process.env.SETTLEMENT_ENGINE?.toLowerCase()]:        'SettlementEngine',
+    [process.env.CLEARING_HOUSE?.toLowerCase()]:           'ClearingHouse',
+    [process.env.TIMELOCK?.toLowerCase()]:                 'Timelock',
+    [process.env.REDEMPTION_MANAGER?.toLowerCase()]:       'RedemptionManager',
+    [process.env.USDC?.toLowerCase()]:                     'USDC',
+    [process.env.USDT?.toLowerCase()]:                     'USDT',
+    '0x5537dbc19eee936a615b151c8c5983fbf735c583':          'Platform Deployer',
+    '0x08a9a44da0bf5ed6bf9027da175dd60949f17d6d':          'Platform Treasury Wallet'
+  };
+}
+
+// Noise events — internal/infrastructure events not useful in the explorer by default
+const NOISE_EVENTS = new Set([
+  'RoleGranted', 'RoleRevoked', 'RoleAdminChanged',
+  'Initialized', 'Upgraded', 'Approval',
+  'OwnershipTransferred', 'Paused', 'Unpaused'
+]);
+
+// ─── Events Explorer API ──────────────────────────────────────
+
+app.get('/api/events', async (req, res) => {
+  const page       = parseInt(req.query.page)  || 1;
+  const limit      = Math.min(parseInt(req.query.limit) || 20, 100);
+  const skip       = (page - 1) * limit;
+  const eventName  = req.query.eventName  || null;
+  const contract   = req.query.contract   ? req.query.contract.toLowerCase() : null;
+  const hideNoise  = req.query.hideNoise !== 'false'; // default: true
+
+  try {
+    const where = { isRemoved: false };
+    if (eventName)  where.eventName        = eventName;
+    if (contract)   where.contractAddress  = contract;
+    if (hideNoise)  where.eventName        = { ...(where.eventName ? { equals: where.eventName } : { notIn: [...NOISE_EVENTS] }) };
+
+    const [total, events] = await Promise.all([
+      prisma.blockchainEvent.count({ where }),
+      prisma.blockchainEvent.findMany({
+        where,
+        orderBy: [{ blockNumber: 'desc' }, { logIndex: 'asc' }],
+        skip,
+        take: limit
+      })
+    ]);
+
+    // Get all distinct event type names for filter dropdown
+    const allEventTypes = await prisma.blockchainEvent.groupBy({
+      by: ['eventName'],
+      where: { isRemoved: false },
+      orderBy: { _count: { eventName: 'desc' } }
+    }).then(rows => rows.map(r => r.eventName));
+
+    const labelMap = buildContractLabelMap();
+
+    // Resolve contract labels — check dynamic vaults
+    const vaultMap = {};
+    const vaults = await prisma.vault.findMany({ select: { vaultAddress: true, name: true, symbol: true } });
+    vaults.forEach(v => { vaultMap[v.vaultAddress] = `${v.name} (${v.symbol})`; });
+
+    const enriched = events.map(e => ({
+      ...e,
+      blockNumber: e.blockNumber.toString(),
+      contractLabel: labelMap[e.contractAddress] || vaultMap[e.contractAddress] || 'Unknown Contract'
+    }));
+
+    res.json(serializeBigInts({
+      data: enriched,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      eventTypes: allEventTypes
+    }));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Vault Explorer API ────────────────────────────────────────
+
+app.get('/api/vaults', async (req, res) => {
+  try {
+    const vaults = await prisma.vault.findMany({
+      orderBy: { createdAt: 'desc' }
+    });
+
+    const enriched = await Promise.all(vaults.map(async (vault) => {
+      const holdersCount = await prisma.tokenHolder.count({
+        where: { tokenAddress: vault.vaultAddress, balance: { gt: 0 } }
+      });
+      const totalFees = await prisma.feeRecord.aggregate({
+        where: { vaultAddress: vault.vaultAddress },
+        _sum: { amount: true }
+      });
+      return {
+        ...vault,
+        holdersCount,
+        totalFeesCollected: totalFees._sum.amount?.toString() || '0'
+      };
+    }));
+
+    res.json(serializeBigInts(enriched));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/vaults/:id/investors', async (req, res) => {
+  const vaultAddress = req.params.id.toLowerCase();
+  try {
+    const holders = await prisma.tokenHolder.findMany({
+      where: { tokenAddress: vaultAddress, balance: { gt: 0 } },
+      orderBy: { balance: 'desc' },
+      take: 50
+    });
+
+    const enriched = await Promise.all(holders.map(async (holder, idx) => {
+      const identityEvent = await prisma.blockchainEvent.findFirst({
+        where: {
+          eventName: 'IdentityRegistered',
+          OR: [
+            { eventPayload: { path: '$.wallet', equals: holder.holderAddress.toLowerCase() } },
+            { eventPayload: { path: '$.wallet', equals: holder.holderAddress } }
+          ]
+        },
+        orderBy: { eventId: 'desc' }
+      });
+
+      const roles = ['Retail', 'Accredited', 'Institutional', 'Regulator'];
+      if (identityEvent) {
+        const p = typeof identityEvent.eventPayload === 'string'
+          ? JSON.parse(identityEvent.eventPayload) : identityEvent.eventPayload;
+        return {
+          ...holder,
+          rank: idx + 1,
+          kycVerified: true,
+          tokenId: p.tokenId?.toString() || 'N/A',
+          role: roles[Number(p.role)] || 'Retail',
+          jurisdiction: p.jurisdiction?.toString() || 'Unknown'
+        };
+      }
+      return { ...holder, rank: idx + 1, kycVerified: false, tokenId: 'N/A', role: 'Retail', jurisdiction: 'Unknown' };
+    }));
+
+    res.json(serializeBigInts(enriched));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/vaults/:id/fees', async (req, res) => {
+  const vaultAddress = req.params.id.toLowerCase();
+  try {
+    const fees = await prisma.feeRecord.findMany({
+      where: { vaultAddress },
+      orderBy: { blockNumber: 'desc' },
+      take: 100
+    });
+
+    // Aggregate totals per type
+    const summary = {};
+    for (const fee of fees) {
+      if (!summary[fee.feeType]) summary[fee.feeType] = 0n;
+      summary[fee.feeType] += BigInt(fee.amount.toString().split('.')[0]);
+    }
+
+    res.json(serializeBigInts({
+      fees,
+      summary: Object.fromEntries(Object.entries(summary).map(([k, v]) => [k, v.toString()]))
+    }));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/vaults/:id/nav', async (req, res) => {
+  const vaultAddress = req.params.id.toLowerCase();
+  try {
+    // NAV submissions are keyed by assetId (the underlying asset address)
+    const vault = await prisma.vault.findUnique({ where: { vaultAddress } });
+    const assetId = vault?.assetAddress || vaultAddress;
+
+    const submissions = await prisma.navSubmission.findMany({
+      where: { assetId },
+      orderBy: { submittedAt: 'desc' },
+      take: 50
+    });
+
+    res.json(serializeBigInts(submissions));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/vaults/:id/settlements', async (req, res) => {
+  const vaultAddress = req.params.id.toLowerCase();
+  try {
+    const settlements = await prisma.settlement.findMany({
+      where: { vaultAddress },
+      orderBy: { requestTime: 'desc' },
+      take: 100
+    });
+
+    res.json(serializeBigInts(settlements));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/vaults/:id/events', async (req, res) => {
+  const vaultAddress = req.params.id.toLowerCase();
+  const page  = parseInt(req.query.page)  || 1;
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  const skip  = (page - 1) * limit;
+  try {
+    const [total, events] = await Promise.all([
+      prisma.blockchainEvent.count({ where: { contractAddress: vaultAddress, isRemoved: false } }),
+      prisma.blockchainEvent.findMany({
+        where: { contractAddress: vaultAddress, isRemoved: false },
+        orderBy: [{ blockNumber: 'desc' }, { logIndex: 'asc' }],
+        skip,
+        take: limit
+      })
+    ]);
+
+    res.json(serializeBigInts({ data: events, total, page, limit, totalPages: Math.ceil(total / limit) }));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

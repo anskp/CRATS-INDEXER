@@ -2,6 +2,23 @@ import prisma from '../config/db.js';
 import logger from '../config/logger.js';
 import { Decimal } from '@prisma/client/runtime/library.js';
 
+function toDecimalValue(value, decimals = 18) {
+  if (value === undefined || value === null) return new Decimal(0);
+  const div = new Decimal(10).pow(decimals);
+  let dec = new Decimal(value.toString()).div(div);
+  const maxVal = new Decimal('999999999999.999999999999999999');
+  if (dec.gt(maxVal)) {
+    logger.warn(`Value ${dec} exceeds MySQL Decimal(30, 18) range. Capping at ${maxVal}`);
+    return maxVal;
+  }
+  const minVal = new Decimal('-999999999999.999999999999999999');
+  if (dec.lt(minVal)) {
+    logger.warn(`Value ${dec} is below MySQL Decimal(30, 18) range. Capping at ${minVal}`);
+    return minVal;
+  }
+  return dec;
+}
+
 export async function projectSettlement(event, tx) {
   const { eventName, txHash, blockNumber, eventPayload, createdAt } = event;
   const payload = typeof eventPayload === 'string' ? JSON.parse(eventPayload) : eventPayload;
@@ -11,7 +28,7 @@ export async function projectSettlement(event, tx) {
     const vaultAddress = payload.vault.toLowerCase();
     const requestId = payload.requestId.toString();
     const investor = payload.investor.toLowerCase();
-    const shares = new Decimal(payload.shares);
+    const shares = toDecimalValue(payload.shares, 18);
     const requestTime = payload.requestTime
       ? new Date(Number(payload.requestTime) * 1000)
       : createdAt;
@@ -49,7 +66,7 @@ export async function projectSettlement(event, tx) {
   else if (eventName === 'RedemptionProcessed') {
     const vaultAddress = payload.vault.toLowerCase();
     const requestId = payload.requestId.toString();
-    const assets = new Decimal(payload.assets);
+    const assets = toDecimalValue(payload.assets, 6);
 
     await tx.settlement.updateMany({
       where: {
@@ -68,7 +85,7 @@ export async function projectSettlement(event, tx) {
   else if (eventName === 'RedemptionClaimed') {
     const vaultAddress = payload.vault.toLowerCase();
     const requestId = payload.requestId.toString();
-    const assets = new Decimal(payload.assets);
+    const assets = toDecimalValue(payload.assets, 6);
 
     await tx.settlement.updateMany({
       where: {
@@ -108,8 +125,8 @@ export async function projectSettlement(event, tx) {
     const buyer = payload.buyer.toLowerCase();
     const seller = payload.seller.toLowerCase();
     const token = payload.token.toLowerCase();
-    const amount = new Decimal(payload.amount);
-    const price = new Decimal(payload.price);
+    const amount = toDecimalValue(payload.amount, 18);
+    const price = toDecimalValue(payload.price, 6);
     
     // Estimate assets as amount * price
     const assets = amount.mul(price);
@@ -163,16 +180,18 @@ export async function projectSettlement(event, tx) {
   
   else if (eventName === 'SettlementFailed') {
     const settlementId = payload.id.toLowerCase();
+    const failReason = payload.reason || payload.failReason || payload.error || 'Unknown failure reason';
 
     await tx.settlement.updateMany({
       where: {
         requestId: settlementId
       },
       data: {
-        status: 'failed'
+        status: 'failed',
+        failReason
       }
     });
 
-    logger.info(`Settlement: Secondary market settlement ${settlementId} failed`);
+    logger.info(`Settlement: Secondary market settlement ${settlementId} failed — reason: ${failReason}`);
   }
 }

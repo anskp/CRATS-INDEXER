@@ -5,6 +5,23 @@ import * as ABIs from '../config/contractABIs.js';
 import { hexToString } from 'viem';
 import { Decimal } from '@prisma/client/runtime/library.js';
 
+function toDecimalValue(value, decimals = 18) {
+  if (value === undefined || value === null) return new Decimal(0);
+  const div = new Decimal(10).pow(decimals);
+  let dec = new Decimal(value.toString()).div(div);
+  const maxVal = new Decimal('999999999999.999999999999999999');
+  if (dec.gt(maxVal)) {
+    logger.warn(`Value ${dec} exceeds MySQL Decimal(30, 18) range. Capping at ${maxVal}`);
+    return maxVal;
+  }
+  const minVal = new Decimal('-999999999999.999999999999999999');
+  if (dec.lt(minVal)) {
+    logger.warn(`Value ${dec} is below MySQL Decimal(30, 18) range. Capping at ${minVal}`);
+    return minVal;
+  }
+  return dec;
+}
+
 export async function projectVault(event, tx) {
   const { eventName, contractAddress, eventPayload } = event;
   const payload = typeof eventPayload === 'string' ? JSON.parse(eventPayload) : eventPayload;
@@ -83,35 +100,39 @@ export async function projectVault(event, tx) {
     logger.info(`Vault: Dynamically discovered and registered new vault: ${name} (${symbol}) at ${vaultAddress}`);
   } 
   
-  else if (eventName === 'Deposit') {
+  else if (eventName === 'Deposit' || eventName === 'Withdraw') {
     const vaultAddress = contractAddress.toLowerCase();
-    const assets = new Decimal(payload.assets);
-    const shares = new Decimal(payload.shares);
-
-    await tx.vault.updateMany({
-      where: { vaultAddress },
-      data: {
-        tvl: { increment: assets },
-        totalShares: { increment: shares }
-      }
+    const dbVault = await tx.vault.findUnique({
+      where: { vaultAddress }
     });
+    const assetAddress = dbVault ? dbVault.assetAddress : '';
+    const isUSDC = assetAddress === process.env.USDC?.toLowerCase();
+    const isUSDT = assetAddress === process.env.USDT?.toLowerCase();
+    const assetDecimals = (isUSDC || isUSDT) ? 6 : 18;
 
-    logger.info(`Vault: Added ${assets} AUM to vault ${vaultAddress} on deposit.`);
-  } 
-  
-  else if (eventName === 'Withdraw') {
-    const vaultAddress = contractAddress.toLowerCase();
-    const assets = new Decimal(payload.assets);
-    const shares = new Decimal(payload.shares);
+    const assets = toDecimalValue(payload.assets, assetDecimals);
+    const shares = toDecimalValue(payload.shares, 18);
 
-    await tx.vault.updateMany({
-      where: { vaultAddress },
-      data: {
-        tvl: { decrement: assets },
-        totalShares: { decrement: shares }
-      }
-    });
+    if (eventName === 'Deposit') {
+      await tx.vault.updateMany({
+        where: { vaultAddress },
+        data: {
+          tvl: { increment: assets },
+          totalShares: { increment: shares }
+        }
+      });
 
-    logger.info(`Vault: Subtracted ${assets} AUM from vault ${vaultAddress} on withdrawal.`);
+      logger.info(`Vault: Added ${assets} AUM to vault ${vaultAddress} on deposit.`);
+    } else {
+      await tx.vault.updateMany({
+        where: { vaultAddress },
+        data: {
+          tvl: { decrement: assets },
+          totalShares: { decrement: shares }
+        }
+      });
+
+      logger.info(`Vault: Subtracted ${assets} AUM from vault ${vaultAddress} on withdrawal.`);
+    }
   }
 }

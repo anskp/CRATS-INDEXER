@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="CRATS Protocol — ERC-4626 Vault Detail">
+  <title>Vault Detail - CRATS Blockchain Explorer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <header>
+    <div class="nav-container">
+      <a href="/dashboard.html" class="logo-link" id="header-logo">
+        <div class="logo-icon">C</div>
+        CRATS Explorer
+      </a>
+      <nav>
+        <ul>
+          <li><a href="/dashboard.html"    id="nav-dashboard">Dashboard</a></li>
+          <li><a href="/blocks.html"       id="nav-blocks">Blocks</a></li>
+          <li><a href="/transactions.html" id="nav-transactions">Transactions</a></li>
+          <li><a href="/events.html"       id="nav-events">Events</a></li>
+          <li><a href="/vaults.html"       id="nav-vaults" class="active">Vaults</a></li>
+          <li><a href="/contracts.html"    id="nav-contracts">Contracts</a></li>
+          <li><a href="/assets.html"       id="nav-assets">Assets</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <section class="search-section">
+    <form class="search-form" id="search-form-vault">
+      <div class="search-bar">
+        <input type="text" placeholder="Search by Wallet Address / Tx Hash / Block Number / Contract Address / Symbol..." required id="search-input-vault">
+        <button type="submit" id="search-submit-vault">Search</button>
+      </div>
+    </form>
+  </section>
+
+  <main id="vault-detail-container">
+    <div class="loader-container">
+      <div class="spinner-large"></div>
+      <p>Loading vault data from ledger...</p>
+    </div>
+  </main>
+
+  <footer>
+    <p>&copy; 2026 CRATS Protocol Indexer &amp; Explorer. Phase 3 Production Release.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
