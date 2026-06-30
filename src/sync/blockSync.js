@@ -7,6 +7,34 @@ import * as ABIs from '../config/contractABIs.js';
 let isSyncing = false;
 let syncTimeout = null;
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function callWithRetry(fn, retries = 5, delayMs = 1500) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const errorStr = error.message || '';
+      const isRetryable = errorStr.includes('429') || 
+                          errorStr.includes('Too Many Requests') || 
+                          errorStr.includes('Too many request') || 
+                          errorStr.includes('LimitExceeded') ||
+                          errorStr.includes('rate limit') ||
+                          errorStr.includes('timeout') ||
+                          errorStr.includes('Timeout') ||
+                          errorStr.includes('limit');
+      
+      if (isRetryable && attempt < retries) {
+        const waitTime = delayMs * Math.pow(2, attempt - 1);
+        logger.warn(`RPC Transient error in blockSync: "${errorStr.substring(0, 80)}". Retrying in ${waitTime}ms... (Attempt ${attempt}/${retries})`);
+        await sleep(waitTime);
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 export async function startSync() {
   logger.info('Starting Block Synchronization Service...');
   initializeABIRegistry();
@@ -42,15 +70,15 @@ async function runSyncLoop() {
       ? Number(lastBlockRecord.blockNumber) + 1
       : Number(process.env.START_BLOCK || 11484000);
 
-    const currentBlock = Number(await publicClient.getBlockNumber());
+    const currentBlock = Number(await callWithRetry(() => publicClient.getBlockNumber()));
 
     if (nextBlockToSync <= currentBlock) {
       logger.info(`Syncing block ${nextBlockToSync} / ${currentBlock} (${currentBlock - nextBlockToSync} blocks behind)`);
       
-      const blockData = await publicClient.getBlock({
+      const blockData = await callWithRetry(() => publicClient.getBlock({
         blockNumber: BigInt(nextBlockToSync),
         includeTransactions: true
-      });
+      }));
 
       // Reorg Check
       if (lastBlockRecord && blockData.parentHash !== lastBlockRecord.blockHash) {
@@ -67,10 +95,10 @@ async function runSyncLoop() {
       if (blockData.transactions.length > 0) {
         try {
           const blockNumHex = '0x' + BigInt(nextBlockToSync).toString(16);
-          const rawReceipts = await publicClient.request({
+          const rawReceipts = await callWithRetry(() => publicClient.request({
             method: 'eth_getBlockReceipts',
             params: [blockNumHex]
-          });
+          }));
           for (const receipt of rawReceipts) {
             receipts[receipt.transactionHash] = {
               status: receipt.status === '0x1' ? 'SUCCESS' : 'REVERTED',
@@ -87,7 +115,7 @@ async function runSyncLoop() {
           logger.warn(`eth_getBlockReceipts failed in blockSync for block ${nextBlockToSync}: ${error.message}. Falling back to individual queries.`);
           for (const tx of blockData.transactions) {
             try {
-              const receipt = await publicClient.getTransactionReceipt({ hash: tx.hash });
+              const receipt = await callWithRetry(() => publicClient.getTransactionReceipt({ hash: tx.hash }));
               receipts[tx.hash] = {
                 status: receipt.status === 'success' ? 'SUCCESS' : 'REVERTED',
                 gasUsed: receipt.gasUsed,

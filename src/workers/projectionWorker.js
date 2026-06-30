@@ -21,6 +21,34 @@ const PROJECTIONS = [
 let workerRunning = false;
 let workerTimeout = null;
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function callWithRetry(fn, retries = 5, delayMs = 1500) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const errorStr = error.message || '';
+      const isRetryable = errorStr.includes('429') || 
+                          errorStr.includes('Too Many Requests') || 
+                          errorStr.includes('Too many request') || 
+                          errorStr.includes('LimitExceeded') ||
+                          errorStr.includes('rate limit') ||
+                          errorStr.includes('timeout') ||
+                          errorStr.includes('Timeout') ||
+                          errorStr.includes('limit');
+      
+      if (isRetryable && attempt < retries) {
+        const waitTime = delayMs * Math.pow(2, attempt - 1);
+        logger.warn(`RPC Transient error in projectionWorker: "${errorStr.substring(0, 80)}". Retrying in ${waitTime}ms... (Attempt ${attempt}/${retries})`);
+        await sleep(waitTime);
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 export function startWorker() {
   logger.info('Starting Projection Worker Service...');
   runWorkerLoop();
@@ -31,7 +59,7 @@ async function runWorkerLoop() {
   workerRunning = true;
 
   try {
-    const currentBlock = Number(await publicClient.getBlockNumber());
+    const currentBlock = Number(await callWithRetry(() => publicClient.getBlockNumber()));
 
     // SELECT ... FOR UPDATE SKIP LOCKED
     // Dual confirmation strategy:
