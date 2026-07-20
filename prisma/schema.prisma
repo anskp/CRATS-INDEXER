@@ -250,3 +250,286 @@ model FailedBlock {
 
   @@map("failed_blocks")
 }
+
+// ─── Layer 1: Identity & Compliance Models ─────────────────────
+
+model SbtIdentity {
+  id              Int      @id @default(autoincrement())
+  walletAddress   String   @unique @map("wallet_address")
+  did             String   @map("did")
+  countryCode     Int      @map("country_code")
+  investorType    String   @map("investor_type") // RETAIL / ACCREDITED / INSTITUTIONAL
+  isVerified      Boolean  @default(true) @map("is_verified")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("sbt_identities")
+}
+
+model WalletComplianceState {
+  id              Int      @id @default(autoincrement())
+  walletAddress   String   @map("wallet_address")
+  tokenAddress    String   @map("token_address")
+  isFrozen        Boolean  @default(false) @map("is_frozen")
+  isRestricted    Boolean  @default(false) @map("is_restricted")
+  restrictionCode Int      @default(0) @map("restriction_code")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@unique([walletAddress, tokenAddress])
+  @@map("wallet_compliance_states")
+}
+
+// ─── Layer 2: Carbon Metadata & Batch Models ──────────────────
+
+model CarbonAssetMetadata {
+  id                        Int      @id @default(autoincrement())
+  assetId                   String   @unique @map("asset_id")
+  contractAddress           String   @map("contract_address")
+  projectId                 String   @map("project_id")
+  methodology               String   @map("methodology")
+  projectType               String   @map("project_type")
+  country                   String   @map("country")
+  standard                  String   @map("standard")
+  serialNumberRange         String   @map("serial_number_range")
+  verificationReportHash    String   @map("verification_report_hash")
+  pddHash                   String   @map("pdd_hash")
+  monitoringReportHash      String   @map("monitoring_report_hash")
+  issuanceCertificateHash   String   @map("issuance_certificate_hash")
+  immobilizationProofHash   String   @map("immobilization_proof_hash")
+  icvcmApproved             Boolean  @default(true) @map("icvcm_approved")
+  createdAt                 DateTime @default(now()) @map("created_at")
+
+  @@map("carbon_asset_metadata")
+}
+
+model CarbonBatch {
+  id               Int      @id @default(autoincrement())
+  batchId          String   @unique @map("batch_id")
+  assetId          String   @map("asset_id")
+  vintageYear      Int      @map("vintage_year")
+  totalCredits     Decimal  @db.Decimal(30, 18) @map("total_credits")
+  availableCredits Decimal  @db.Decimal(30, 18) @map("available_credits")
+  retiredCredits   Decimal  @default(0) @db.Decimal(30, 18) @map("retired_credits")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@map("carbon_batches")
+}
+
+// ─── Layer 3: Nav, Vault & Fee Models ─────────────────────────
+
+model NavAttestation {
+  id              Int      @id @default(autoincrement())
+  assetId         String   @map("asset_id")
+  tokenAddress    String   @map("token_address")
+  navValueUsd     Decimal  @db.Decimal(30, 18) @map("nav_value_usd")
+  method          String   @map("method")
+  verifierAddress String   @map("verifier_address")
+  valuationDate   DateTime @map("valuation_date")
+  txHash          String   @map("tx_hash")
+  blockNumber     BigInt   @map("block_number")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@map("nav_attestations")
+}
+
+model FeeAccrualLog {
+  id              Int      @id @default(autoincrement())
+  vaultAddress    String   @map("vault_address")
+  feeType         String   @map("fee_type") // MANAGEMENT / PERFORMANCE / ENTRY / EXIT
+  feeBps          Int      @map("fee_bps")
+  feeAmountUsd    Decimal  @db.Decimal(30, 18) @map("fee_amount_usd")
+  recipient       String   @map("recipient")
+  hwmCheckpoint   Decimal? @db.Decimal(30, 18) @map("hwm_checkpoint")
+  txHash          String   @map("tx_hash")
+  blockNumber     BigInt   @map("block_number")
+  timestamp       DateTime @map("timestamp")
+
+  @@map("fee_accrual_logs")
+}
+
+// ─── Layer 4: BOR, P2P & Retirement Models ────────────────────
+
+model BeneficialOwnerRecord {
+  id                Int      @id @default(autoincrement())
+  tokenAddress      String   @map("token_address")
+  investorAddress   String   @map("investor_address")
+  investorHandle    String?  @map("investor_handle")
+  balance           Decimal  @db.Decimal(30, 18) @map("balance")
+  ownershipPercent  Decimal  @db.Decimal(10, 4) @map("ownership_percent")
+  entryNav          Decimal  @db.Decimal(30, 18) @map("entry_nav")
+  totalValueUsd     Decimal  @db.Decimal(30, 18) @map("total_value_usd")
+  lastUpdatedBlock  BigInt   @map("last_updated_block")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@unique([tokenAddress, investorAddress])
+  @@map("beneficial_owner_records")
+}
+
+model P2pSettlementLog {
+  id              Int      @id @default(autoincrement())
+  swapId          String   @map("swap_id")
+  tokenAddress    String   @map("token_address")
+  senderAddress   String   @map("sender_address")
+  senderHandle    String?  @map("sender_handle")
+  receiverAddress String   @map("receiver_address")
+  receiverHandle  String?  @map("receiver_handle")
+  amount          Decimal  @db.Decimal(30, 18) @map("amount")
+  priceUsd        Decimal  @db.Decimal(30, 18) @map("price_usd")
+  settlementType  String   @map("settlement_type") // P2P_DVP / PRIMARY_MINT
+  txHash          String   @map("tx_hash")
+  blockNumber     BigInt   @map("block_number")
+  timestamp       DateTime @map("timestamp")
+
+  @@map("p2p_settlement_logs")
+}
+
+model CarbonRetirementRecord {
+  id               Int      @id @default(autoincrement())
+  retirementId     String   @unique @map("retirement_id")
+  retireeAddress   String   @map("retiree_address")
+  retireeHandle    String?  @map("retiree_handle")
+  amount           Decimal  @db.Decimal(30, 18) @map("amount")
+  beneficiaryName  String   @map("beneficiary_name")
+  retirementReason String   @map("retirement_reason")
+  certificateCid   String?  @map("certificate_cid")
+  status           String   @map("status") // SUCCESS / PENDING_RETRY / ESCALATED
+  txHash           String   @map("tx_hash")
+  blockNumber      BigInt   @map("block_number")
+  timestamp        DateTime @map("timestamp")
+
+  @@map("carbon_retirement_records")
+}
+
+model AssetLifecycleExit {
+  id                   Int      @id @default(autoincrement())
+  exitId               String   @unique @map("exit_id")
+  tokenAddress         String   @map("token_address")
+  vaultAddress         String   @map("vault_address")
+  liquidationUsdcPool  Decimal  @db.Decimal(30, 18) @map("liquidation_usdc_pool")
+  totalSharesLocked    Decimal  @db.Decimal(30, 18) @map("total_shares_locked")
+  payoutPerShare       Decimal  @db.Decimal(30, 18) @map("payout_per_share")
+  txHash               String   @map("tx_hash")
+  blockNumber          BigInt   @map("block_number")
+  timestamp            DateTime @map("timestamp")
+
+  @@map("asset_lifecycle_exits")
+}
+
+// ─── Real Estate & Fine Art Plugin Metadata Models ───────────
+
+model RealEstateMetadata {
+  id                Int      @id @default(autoincrement())
+  assetId           String   @unique @map("asset_id")
+  contractAddress   String   @map("contract_address")
+  propertyName      String   @map("property_name")
+  propertyType      String   @map("property_type") // RESIDENTIAL / COMMERCIAL / INDUSTRIAL / LAND
+  squareFootage     Decimal  @db.Decimal(15, 2) @map("square_footage")
+  appraisalValueUsd Decimal  @db.Decimal(30, 18) @map("appraisal_value_usd")
+  occupancyRateBps  Int      @default(10000) @map("occupancy_rate_bps")
+  zoningClass       String?  @map("zoning_class")
+  locationAddress   String   @map("location_address")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@map("real_estate_metadata")
+}
+
+model FineArtMetadata {
+  id                   Int      @id @default(autoincrement())
+  assetId              String   @unique @map("asset_id")
+  contractAddress      String   @map("contract_address")
+  title                String   @map("title")
+  artist               String   @map("artist")
+  medium               String   @map("medium")
+  creationYear         Int      @map("creation_year")
+  appraisalValueUsd    Decimal  @db.Decimal(30, 18) @map("appraisal_value_usd")
+  provenanceIpfsHash   String?  @map("provenance_ipfs_hash")
+  authCertificateHash  String   @map("auth_certificate_hash")
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  @@map("fine_art_metadata")
+}
+
+// ─── Off-Chain Document Registry (DMS v4) Model ─────────────
+
+model DmsDocument {
+  id                Int      @id @default(autoincrement())
+  documentId        String   @unique @map("document_id")
+  assetId           String   @map("asset_id")
+  documentType      String   @map("document_type") // PROSPECTUS / APPRAISAL / PDD / VERIFICATION / TITLE_DEED
+  sha256Hash        String   @map("sha256_hash")
+  fileUri           String   @map("file_uri")
+  isVerified        Boolean  @default(true) @map("is_verified")
+  expiryDate        DateTime? @map("expiry_date")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@map("dms_documents")
+}
+
+// ─── Financial Yield & Physical Redemption Models ─────────────
+
+model YieldDistribution {
+  id                 Int      @id @default(autoincrement())
+  distributionId     String   @unique @map("distribution_id")
+  vaultAddress       String   @map("vault_address")
+  totalYieldUsd      Decimal  @db.Decimal(30, 18) @map("total_yield_usd")
+  yieldPerShareUsd   Decimal  @db.Decimal(30, 18) @map("yield_per_share_usd")
+  snapshotBlock      BigInt   @map("snapshot_block")
+  txHash             String   @map("tx_hash")
+  timestamp          DateTime @default(now()) @map("timestamp")
+
+  @@map("yield_distributions")
+}
+
+model YieldClaim {
+  id              Int      @id @default(autoincrement())
+  claimId         String   @unique @map("claim_id")
+  distributionId  String   @map("distribution_id")
+  investorAddress String   @map("investor_address")
+  amountClaimed   Decimal  @db.Decimal(30, 18) @map("amount_claimed")
+  txHash          String   @map("tx_hash")
+  timestamp       DateTime @default(now()) @map("timestamp")
+
+  @@map("yield_claims")
+}
+
+model PhysicalRedemption {
+  id               Int      @id @default(autoincrement())
+  redemptionId     String   @unique @map("redemption_id")
+  tokenAddress     String   @map("token_address")
+  investorAddress  String   @map("investor_address")
+  amountTokens     Decimal  @db.Decimal(30, 18) @map("amount_tokens")
+  status           String   @map("status") // REQUESTED / IN_ESCROW / SHIPPED / PHYSICAL_SETTLED / REJECTED
+  trackingRef      String?  @map("tracking_ref")
+  txHash           String   @map("tx_hash")
+  timestamp        DateTime @default(now()) @map("timestamp")
+
+  @@map("physical_redemptions")
+}
+
+// ─── Compliance Travel Rule & Governance Models ──────────────
+
+model TravelRuleVaspLog {
+  id                 Int      @id @default(autoincrement())
+  txHash             String   @unique @map("tx_hash")
+  originatorAddress  String   @map("originator_address")
+  beneficiaryAddress String   @map("beneficiary_address")
+  originatorVasp     String   @map("originator_vasp")
+  beneficiaryVasp    String   @map("beneficiary_vasp")
+  amountUsd          Decimal  @db.Decimal(30, 18) @map("amount_usd")
+  status             String   @map("status") // PASSED / BLOCKED / FLAGGED
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  @@map("travel_rule_vasp_logs")
+}
+
+model InvestorRightsLog {
+  id              Int      @id @default(autoincrement())
+  tokenAddress    String   @map("token_address")
+  investorAddress String   @map("investor_address")
+  votingPower     Decimal  @db.Decimal(30, 18) @map("voting_power")
+  dividendRight   Decimal  @db.Decimal(10, 4) @map("dividend_right")
+  hasInspection   Boolean  @default(true) @map("has_inspection")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@unique([tokenAddress, investorAddress])
+  @@map("investor_rights_logs")
+}

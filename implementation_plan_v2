@@ -1,0 +1,254 @@
+# CRATS Protocol Production Indexer (`crats-indexer`) — Full 4-Layer Implementation Plan
+
+This implementation plan outlines the architecture, database schema, event projections, and API engines for the **CRATS Protocol Indexer (`crats-indexer`)**.
+
+The indexer captures **every inch of data**, price attestations, vault yield calculations, fee accruals, DMS hashes, carbon credit batch vints, compliance restrictions, and secondary P2P beneficial ownership register (BOR v2) updates across all 4 layers of the CRATS EVM Protocol.
+
+---
+
+## User Review Required
+
+> [!IMPORTANT]
+> **Database Infrastructure**: The indexer uses Prisma ORM connected to MySQL / PostgreSQL. All blockchain events are ingested in strict block-sequential order with automatic chain re-org handling (rolling back projections on parent hash mismatch).
+
+> [!TIP]
+> **Real-Time WebSockets & GraphQL API**: The indexer exposes both a REST/GraphQL query layer and WebSocket subscriptions for instant updates to CopyM applications (Admin Web, Investor Web, Issuer Web).
+
+---
+
+## Proposed System Architecture & Layer Breakdown
+
+### Layer 1: Identity & Compliance Infrastructure
+- **Contracts**: `IdentityRegistry.sol`, `IdentityRegistryStorage.sol`, `TrustedIssuersRegistry.sol`, `ClaimTopicsRegistry.sol`, `ComplianceModule.sol`
+- **Indexed Entities**:
+  - `sbt_identities`: SBT Claims, ON-CHAIN DIDs, country codes, investor verification levels.
+  - `wallet_compliance_states`: Wallet restrictions (`isFrozen`, `investorRestrictions`), freeze timestamps, restriction reasons.
+  - `trusted_issuers`: Registered trusted SBT issuers and claim topics.
+  - `compliance_audit_logs`: On-chain compliance enforcement events, rule violations, circuit breaker pauses.
+
+### Layer 2: Asset Tokenization & Carbon Metadata Infrastructure
+- **Contracts**: `AssetToken.sol` (ERC-3643 / ERC-20), `AssetRegistry.sol`, `CarbonAssetMetadataStore.sol`, `CarbonBatchManager.sol`
+- **Indexed Entities**:
+  - `indexed_assets`: Asset ID, Name, Symbol, Decimals, Category (`REAL_ESTATE`, `CARBON_CREDIT`, `FINE_ART`, `COMMODITIES`, `PRIVATE_EQUITY`), Contract Address, Vault Address.
+  - `carbon_asset_metadata`: Verra / Gold Standard Project ID, methodology, project type, vintage year, total credit quantity, serial number ranges, 32-byte document SHA-256 hashes (`pddHash`, `verificationReportHash`, `monitoringReportHash`, `issuanceCertificateHash`, `immobilizationProofHash`), ICVCM CCP flags.
+  - `carbon_vintage_batches`: Batch ID, vintage year, total credits, available credits, retired credits, mint txHash.
+
+### Layer 3: Vault Yield, NAV Valuation & Fee Infrastructure
+- **Contracts**: `VaultFactory.sol`, `SyncVaultTemplate.sol`, `AsyncVaultTemplate.sol`, `NAVOracle.sol`, `FeeEngine.sol`
+- **Indexed Entities**:
+  - `indexed_vaults`: Vault Address, Asset Token Address, Category, Vault Type (`SYNC` / `ASYNC`), TVL, Total Vault Shares, Decimals.
+  - `vault_deposits_withdrawals`: Investor Address, Vault Address, Transaction Type (`DEPOSIT` / `WITHDRAWAL`), USDC Amount, Shares Minted/Burned, Entry NAV per share, TxHash, Block Number.
+  - `async_settlement_queue`: Request ID, Investor, Shares, Assets, Status (`PENDING`, `PROCESSED`, `CLAIMED`, `CANCELLED`, `FAILED`), Request Time, Settlement Time.
+  - `nav_attestations`: Asset ID, NAV Value (USD), Valuation Method, Submitter/Verifier Address, Valuation Date, Attestation TxHash, Dispute Status.
+  - `fee_accrual_logs`: Vault Address, Fee Type (`MANAGEMENT`, `PERFORMANCE`, `ENTRY`, `EXIT`), Fee BPS, Calculated Amount, Recipient Wallet, HWM (High-Water Mark) / Hurdle Rate Checkpoints.
+
+### Layer 4: Secondary Settlement & Beneficial Ownership Register (BOR v2)
+- **Contracts**: `OwnershipSyncManager.sol` (BOR v2), `CarbonRetirementManager.sol`, `LifecycleExitManager.sol`
+- **Indexed Entities**:
+  - `beneficial_ownership_register`: Investor Wallet Address, Investor Handle (`@handle`), Asset Token Address, Token Balance, Pro-Rata Vault Ownership %, Entry NAV, Total Value USD, Last Updated Block.
+  - `p2p_settlement_logs`: Swap ID, Sender Address (`@senderHandle`), Receiver Address (`@receiverHandle`), Token Address, Quantity Transferred, Settlement Price USD, Settlement Type (`P2P_DVP`, `PRIMARY_MINT`), TxHash, Block Number.
+  - `carbon_retirements`: Retirement ID, Retiree Address (`@handle`), Amount Retired, Beneficiary Name, Retirement Reason, Certificate Hash / IPFS CID, Status (`SUCCESS`, `PENDING_RETRY`), Retry Count, TxHash.
+  - `asset_lifecycle_exits`: Exit ID, Token Address, Vault Address, Liquidation USDC Pool Amount, Total Shares Locked, Payout Per Share, Distribution TxHash.
+
+---
+
+## Detailed Database Schema Additions (`crats-indexer/prisma/schema.prisma`)
+
+```prisma
+// ─── Layer 1: Identity & Compliance Models ─────────────────────
+
+model SbtIdentity {
+  id              Int      @id @default(autoincrement())
+  walletAddress   String   @unique @map("wallet_address")
+  did             String   @map("did")
+  countryCode     Int      @map("country_code")
+  investorType    String   @map("investor_type") // RETAIL / ACCREDITED / INSTITUTIONAL
+  isVerified      Boolean  @default(true) @map("is_verified")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("sbt_identities")
+}
+
+model WalletComplianceState {
+  id              Int      @id @default(autoincrement())
+  walletAddress   String   @map("wallet_address")
+  tokenAddress    String   @map("token_address")
+  isFrozen        Boolean  @default(false) @map("is_frozen")
+  isRestricted    Boolean  @default(false) @map("is_restricted")
+  restrictionCode Int      @default(0) @map("restriction_code")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@unique([walletAddress, tokenAddress])
+  @@map("wallet_compliance_states")
+}
+
+// ─── Layer 2: Carbon Metadata & Batch Models ──────────────────
+
+model CarbonAssetMetadata {
+  id                        Int      @id @default(autoincrement())
+  assetId                   String   @unique @map("asset_id")
+  contractAddress           String   @map("contract_address")
+  projectId                 String   @map("project_id")
+  methodology               String   @map("methodology")
+  projectType               String   @map("project_type")
+  country                   String   @map("country")
+  standard                  String   @map("standard")
+  serialNumberRange         String   @map("serial_number_range")
+  verificationReportHash    String   @map("verification_report_hash")
+  pddHash                   String   @map("pdd_hash")
+  monitoringReportHash      String   @map("monitoring_report_hash")
+  issuanceCertificateHash   String   @map("issuance_certificate_hash")
+  immobilizationProofHash   String   @map("immobilization_proof_hash")
+  icvcmApproved             Boolean  @default(true) @map("icvcm_approved")
+  createdAt                 DateTime @default(now()) @map("created_at")
+
+  @@map("carbon_asset_metadata")
+}
+
+model CarbonBatch {
+  id               Int      @id @default(autoincrement())
+  batchId          String   @unique @map("batch_id")
+  assetId          String   @map("asset_id")
+  vintageYear      Int      @map("vintage_year")
+  totalCredits     Decimal  @db.Decimal(30, 18) @map("total_credits")
+  availableCredits Decimal  @db.Decimal(30, 18) @map("available_credits")
+  retiredCredits   Decimal  @default(0) @db.Decimal(30, 18) @map("retired_credits")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@map("carbon_batches")
+}
+
+// ─── Layer 3: Nav, Vault & Fee Models ─────────────────────────
+
+model NavAttestation {
+  id              Int      @id @default(autoincrement())
+  assetId         String   @map("asset_id")
+  tokenAddress    String   @map("token_address")
+  navValueUsd     Decimal  @db.Decimal(30, 18) @map("nav_value_usd")
+  method          String   @map("method")
+  verifierAddress String   @map("verifier_address")
+  valuationDate   DateTime @map("valuation_date")
+  txHash          String   @map("tx_hash")
+  blockNumber     BigInt   @map("block_number")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@map("nav_attestations")
+}
+
+model FeeAccrualLog {
+  id              Int      @id @default(autoincrement())
+  vaultAddress    String   @map("vault_address")
+  feeType         String   @map("fee_type") // MANAGEMENT / PERFORMANCE / ENTRY / EXIT
+  feeBps          Int      @map("fee_bps")
+  feeAmountUsd    Decimal  @db.Decimal(30, 18) @map("fee_amount_usd")
+  recipient       String   @map("recipient")
+  hwmCheckpoint   Decimal? @db.Decimal(30, 18) @map("hwm_checkpoint")
+  txHash          String   @map("tx_hash")
+  blockNumber     BigInt   @map("block_number")
+  timestamp       DateTime @map("timestamp")
+
+  @@map("fee_accrual_logs")
+}
+
+// ─── Layer 4: BOR, P2P & Retirement Models ────────────────────
+
+model BeneficialOwnerRecord {
+  id                Int      @id @default(autoincrement())
+  tokenAddress      String   @map("token_address")
+  investorAddress   String   @map("investor_address")
+  investorHandle    String?  @map("investor_handle")
+  balance           Decimal  @db.Decimal(30, 18) @map("balance")
+  ownershipPercent  Decimal  @db.Decimal(10, 4) @map("ownership_percent")
+  entryNav          Decimal  @db.Decimal(30, 18) @map("entry_nav")
+  totalValueUsd     Decimal  @db.Decimal(30, 18) @map("total_value_usd")
+  lastUpdatedBlock  BigInt   @map("last_updated_block")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@unique([tokenAddress, investorAddress])
+  @@map("beneficial_owner_records")
+}
+
+model P2pSettlementLog {
+  id              Int      @id @default(autoincrement())
+  swapId          String   @map("swap_id")
+  tokenAddress    String   @map("token_address")
+  senderAddress   String   @map("sender_address")
+  senderHandle    String?  @map("sender_handle")
+  receiverAddress String   @map("receiver_address")
+  receiverHandle  String?  @map("receiver_handle")
+  amount          Decimal  @db.Decimal(30, 18) @map("amount")
+  priceUsd        Decimal  @db.Decimal(30, 18) @map("price_usd")
+  settlementType  String   @map("settlement_type") // P2P_DVP / PRIMARY_MINT
+  txHash          String   @map("tx_hash")
+  blockNumber     BigInt   @map("block_number")
+  timestamp       DateTime @map("timestamp")
+
+  @@map("p2p_settlement_logs")
+}
+
+model CarbonRetirementRecord {
+  id               Int      @id @default(autoincrement())
+  retirementId     String   @unique @map("retirement_id")
+  retireeAddress   String   @map("retiree_address")
+  retireeHandle    String?  @map("retiree_handle")
+  amount           Decimal  @db.Decimal(30, 18) @map("amount")
+  beneficiaryName  String   @map("beneficiary_name")
+  retirementReason String   @map("retirement_reason")
+  certificateCid   String?  @map("certificate_cid")
+  status           String   @map("status") // SUCCESS / PENDING_RETRY / ESCALATED
+  txHash           String   @map("tx_hash")
+  blockNumber      BigInt   @map("block_number")
+  timestamp        DateTime @map("timestamp")
+
+  @@map("carbon_retirement_records")
+}
+
+model AssetLifecycleExit {
+  id                   Int      @id @default(autoincrement())
+  exitId               String   @unique @map("exit_id")
+  tokenAddress         String   @map("token_address")
+  vaultAddress         String   @map("vault_address")
+  liquidationUsdcPool  Decimal  @db.Decimal(30, 18) @map("liquidation_usdc_pool")
+  totalSharesLocked    Decimal  @db.Decimal(30, 18) @map("total_shares_locked")
+  payoutPerShare       Decimal  @db.Decimal(30, 18) @map("payout_per_share")
+  txHash               String   @map("tx_hash")
+  blockNumber          BigInt   @map("block_number")
+  timestamp            DateTime @map("timestamp")
+
+  @@map("asset_lifecycle_exits")
+}
+```
+
+---
+
+## 3. Implementation Steps & File Modifications
+
+### Component 1: `crats-indexer/prisma/schema.prisma`
+- Append 8 Layer-specific database models (`SbtIdentity`, `WalletComplianceState`, `CarbonAssetMetadata`, `CarbonBatch`, `NavAttestation`, `FeeAccrualLog`, `BeneficialOwnerRecord`, `P2pSettlementLog`, `CarbonRetirementRecord`, `AssetLifecycleExit`).
+- Run `npx prisma generate` & `npx prisma migrate dev`.
+
+### Component 2: Indexer Event Ingestion Engine (`crats-indexer/src/ingestion/`)
+- `eventIngestionService.js`: Listens to block header events on Sepolia (`chainId: 11155111`).
+- Parses topics for all CRATS EVM events (`Transfer`, `SyncRouted`, `NAVUpdated`, `FeeAccrued`, `RetirementCompleted`, `LifecycleExitInitiated`).
+
+### Component 3: Projection Processing Engine (`crats-indexer/src/projections/`)
+- `borProjection.js`: Updates `beneficial_owner_records` on every token transfer and P2P swap.
+- `navProjection.js`: Updates `nav_attestations` and re-calculates vault share pricing.
+- `feeProjection.js`: Checkpoints continuous management fee accruals and performance High-Water Marks (HWM).
+- `carbonRetirementProjection.js`: Tracks carbon batch retirements and retry queues.
+
+### Component 4: High-Performance GraphQL & REST API Server (`crats-indexer/src/api/`)
+- Exposes query endpoints:
+  - `GET /api/v1/bor/:tokenAddress`: Returns Beneficial Ownership Register for an asset with `@handles`.
+  - `GET /api/v1/vaults/:vaultAddress/accounting`: Returns AUM, NAV, Treasury vs Vault balances, fee accruals.
+  - `GET /api/v1/carbon/metadata/:assetId`: Returns carbon metadata, serial ranges, and 32-byte DMS document hashes.
+  - `GET /api/v1/p2p/history`: Returns secondary settlement audit trail.
+
+---
+
+## 4. Verification & Testing Plan
+
+1. **Database Schema Sync**: Run `npx prisma generate` in `crats-indexer` and confirm zero schema errors.
+2. **Sepolia Event Replay Test**: Replay Sepolia test blocks (`#7,800,000` to `#7,850,000`) and verify all event payloads map correctly to projections.
+3. **BOR Audit Test**: Execute P2P swap and verify `beneficial_owner_records` updates investor shares and ownership percentages.
+4. **API Response Verification**: Query `/api/v1/bor/0x3643...` and ensure `@handles` and USD values match on-chain states.

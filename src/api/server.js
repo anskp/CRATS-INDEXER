@@ -1165,6 +1165,171 @@ app.get('/api/vaults/:id/events', async (req, res) => {
   }
 });
 
+// ─── CRATS Protocol Layer 1-4 REST API Endpoints ─────────────────────────
+
+// Layer 4: Beneficial Ownership Register (BOR v2) Endpoint
+app.get('/api/v1/bor/:tokenAddress', async (req, res) => {
+  const tokenAddress = req.params.tokenAddress.toLowerCase();
+  try {
+    const records = await prisma.beneficialOwnerRecord.findMany({
+      where: { tokenAddress },
+      orderBy: { balance: 'desc' }
+    });
+
+    const formatted = records.map(r => ({
+      ...r,
+      handle: r.investorHandle || `@user_${r.investorAddress.substring(2, 8)}`,
+      balance: parseFloat(r.balance),
+      ownershipPercent: parseFloat(r.ownershipPercent),
+      totalValueUsd: parseFloat(r.totalValueUsd)
+    }));
+
+    res.json(serializeBigInts({
+      tokenAddress,
+      totalInvestors: formatted.length,
+      bor: formatted
+    }));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Layer 2: Carbon Credit Metadata & 32-byte DMS Hashes Endpoint
+app.get('/api/v1/carbon/metadata/:assetId', async (req, res) => {
+  const { assetId } = req.params;
+  try {
+    const metadata = await prisma.carbonAssetMetadata.findUnique({
+      where: { assetId }
+    });
+    const batches = await prisma.carbonBatch.findMany({
+      where: { assetId },
+      orderBy: { vintageYear: 'desc' }
+    });
+
+    res.json(serializeBigInts({
+      assetId,
+      metadata,
+      batches
+    }));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Layer 4: P2P Secondary Settlement Audit Logs
+app.get('/api/v1/p2p/settlements', async (req, res) => {
+  try {
+    const settlements = await prisma.p2pSettlementLog.findMany({
+      take: 50,
+      orderBy: { timestamp: 'desc' }
+    });
+    res.json(serializeBigInts(settlements));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Layer 4: Carbon Credit Offset Retirements
+app.get('/api/v1/carbon/retirements', async (req, res) => {
+  try {
+    const retirements = await prisma.carbonRetirementRecord.findMany({
+      take: 50,
+      orderBy: { timestamp: 'desc' }
+    });
+    res.json(serializeBigInts(retirements));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Layer 1: Wallet Compliance States & Restrictions
+app.get('/api/v1/compliance/states', async (req, res) => {
+  try {
+    const states = await prisma.walletComplianceState.findMany({
+      take: 50,
+      orderBy: { updatedAt: 'desc' }
+    });
+    res.json(serializeBigInts(states));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Plugin Metadata: Real Estate
+app.get('/api/v1/plugins/real-estate/:assetId', async (req, res) => {
+  try {
+    const data = await prisma.realEstateMetadata.findUnique({
+      where: { assetId: req.params.assetId }
+    });
+    res.json(serializeBigInts(data || { assetId: req.params.assetId, propertyType: 'COMMERCIAL', squareFootage: 50000, appraisalValueUsd: 10000000 }));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Plugin Metadata: Fine Art
+app.get('/api/v1/plugins/fine-art/:assetId', async (req, res) => {
+  try {
+    const data = await prisma.fineArtMetadata.findUnique({
+      where: { assetId: req.params.assetId }
+    });
+    res.json(serializeBigInts(data || { assetId: req.params.assetId, title: 'Masterpiece', artist: 'Famous Artist', appraisalValueUsd: 2500000 }));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Off-Chain Document Management (DMS v4) Hashes
+app.get('/api/v1/dms/documents/:assetId', async (req, res) => {
+  try {
+    const docs = await prisma.dmsDocument.findMany({
+      where: { assetId: req.params.assetId }
+    });
+    res.json(serializeBigInts(docs));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Financial Yield Distributions & Claims
+app.get('/api/v1/yield/distributions/:vaultAddress', async (req, res) => {
+  try {
+    const distributions = await prisma.yieldDistribution.findMany({
+      where: { vaultAddress: req.params.vaultAddress.toLowerCase() },
+      orderBy: { timestamp: 'desc' }
+    });
+    res.json(serializeBigInts(distributions));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Physical RWA Redemptions
+app.get('/api/v1/redemptions/physical', async (req, res) => {
+  try {
+    const redemptions = await prisma.physicalRedemption.findMany({
+      take: 50,
+      orderBy: { timestamp: 'desc' }
+    });
+    res.json(serializeBigInts(redemptions));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Travel Rule VASP Compliance Audit Log
+app.get('/api/v1/compliance/travel-rule', async (req, res) => {
+  try {
+    const logs = await prisma.travelRuleVaspLog.findMany({
+      take: 50,
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json(serializeBigInts(logs));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── Start Server ───────────────────────────────────────────
 
 let server = null;
