@@ -2,7 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import prisma from '../config/db.js';
 import logger from '../config/logger.js';
-import publicClient from '../config/viem.js';
+import publicClient, { getWalletClient } from '../config/viem.js';
+import { privateKeyToAccount } from 'viem/accounts';
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -36,6 +37,10 @@ function serializeBigInts(value) {
   if (value === null || value === undefined) return value;
   if (typeof value === 'bigint') return value.toString();
   if (value instanceof Date) return value.toISOString();   // ← Date guard MUST come before object check
+  if (value && typeof value === 'object' && typeof value.toFixed === 'function' && 
+      (value.constructor?.name === 'Decimal' || value._isDecimal || (value.d !== undefined && value.e !== undefined))) {
+    return value.toString();
+  }
   if (Array.isArray(value)) return value.map(serializeBigInts);
   if (typeof value === 'object') {
     return Object.fromEntries(
@@ -616,10 +621,34 @@ app.get('/api/contracts/:address', async (req, res) => {
   }
 });
 
+app.get('/api/wallets', async (req, res) => {
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 100);
+  try {
+    const [total, wallets] = await Promise.all([
+      prisma.trackedWallet.count(),
+      prisma.trackedWallet.findMany({
+        include: { balances: { orderBy: { tokenSymbol: 'asc' } } },
+        orderBy: [{ registeredAt: 'desc' }, { createdAt: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit
+      })
+    ]);
+
+    res.json(serializeBigInts({ total, page, limit, totalPages: Math.ceil(total / limit), data: wallets }));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/api/wallets/:address', async (req, res) => {
   const address = req.params.address.toLowerCase();
   try {
-    const [positions, totalTx, events] = await Promise.all([
+    const [trackedWallet, positions, totalTx, events] = await Promise.all([
+      prisma.trackedWallet.findUnique({
+        where: { walletAddress: address },
+        include: { balances: { orderBy: { tokenSymbol: 'asc' } } }
+      }),
       prisma.portfolioPosition.findMany({
         where: { walletAddress: address }
       }),
@@ -652,6 +681,17 @@ app.get('/api/wallets/:address', async (req, res) => {
 
     res.json(serializeBigInts({
       walletAddress: address,
+      identity: trackedWallet ? {
+        holderName: trackedWallet.holderName,
+        handle: trackedWallet.handle,
+        displayName: trackedWallet.displayName,
+        did: trackedWallet.did,
+        role: trackedWallet.role,
+        jurisdiction: trackedWallet.jurisdiction,
+        identityTokenId: trackedWallet.identityTokenId,
+        registeredAt: trackedWallet.registeredAt
+      } : null,
+      balances: trackedWallet?.balances || [],
       assetsOwned: positions.length,
       vaultDeposits: events.filter(e => e.eventName === 'Deposit').length,
       vaultWithdrawals: events.filter(e => e.eventName === 'Withdraw').length,
@@ -659,6 +699,31 @@ app.get('/api/wallets/:address', async (req, res) => {
       portfolioValue,
       positions,
       recentEvents: events
+    }));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/wallets/:address/balances', async (req, res) => {
+  const address = req.params.address.toLowerCase();
+  try {
+    const wallet = await prisma.trackedWallet.findUnique({
+      where: { walletAddress: address },
+      include: { balances: { orderBy: { tokenSymbol: 'asc' } } }
+    });
+
+    if (!wallet) {
+      return res.status(404).json({ error: 'Wallet is not registered in the CRATS IdentityRegistry' });
+    }
+
+    res.json(serializeBigInts({
+      walletAddress: wallet.walletAddress,
+      holderName: wallet.holderName,
+      handle: wallet.handle,
+      role: wallet.role,
+      balances: wallet.balances,
+      lastUpdated: wallet.updatedAt
     }));
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1326,6 +1391,120 @@ app.get('/api/v1/compliance/travel-rule', async (req, res) => {
     });
     res.json(serializeBigInts(logs));
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Mock USDC Faucet Endpoints ───────────────────────────────
+
+const MOCK_USDC_ABI = [
+  {
+    inputs: [
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' }
+    ],
+    name: 'mint',
+    outputs: [],
+    stateMutability: 'nonpayable',
+    type: 'function'
+  },
+  {
+    inputs: [
+      { name: 'account', type: 'address' }
+    ],
+    name: 'balanceOf',
+    outputs: [
+      { name: '', type: 'uint256' }
+    ],
+    stateMutability: 'view',
+    type: 'function'
+  },
+  {
+    inputs: [],
+    name: 'decimals',
+    outputs: [
+      { name: '', type: 'uint8' }
+    ],
+    stateMutability: 'view',
+    type: 'function'
+  }
+];
+
+app.get('/api/faucet/config', async (req, res) => {
+  try {
+    const usdcAddress = process.env.USDC || '';
+    const privateKey = process.env.PRIVATE_KEY;
+    let faucetAddress = 'Not Configured';
+    if (privateKey) {
+      const account = privateKeyToAccount(privateKey);
+      faucetAddress = account.address;
+    }
+    res.json({
+      usdcAddress,
+      faucetAddress
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/faucet/mint', async (req, res) => {
+  const { address, amount } = req.body;
+
+  if (!address || !address.startsWith('0x') || address.length !== 42) {
+    return res.status(400).json({ error: 'Invalid wallet address.' });
+  }
+
+  const numericAmount = parseFloat(amount);
+  if (isNaN(numericAmount) || numericAmount <= 0) {
+    return res.status(400).json({ error: 'Amount must be a positive number.' });
+  }
+
+  try {
+    const usdcAddress = process.env.USDC;
+    if (!usdcAddress) {
+      throw new Error('USDC contract address is not configured in indexer env.');
+    }
+
+    const privateKey = process.env.PRIVATE_KEY;
+    if (!privateKey) {
+      throw new Error('PRIVATE_KEY is not configured in indexer env.');
+    }
+
+    // Convert amount to 6 decimals (USDC uses 6 decimals)
+    const amountBigInt = BigInt(Math.round(numericAmount * 1e6));
+
+    const account = privateKeyToAccount(privateKey);
+    const walletClient = getWalletClient();
+
+    logger.info(`Faucet: Minting ${numericAmount} USDC to ${address}`);
+
+    const hash = await walletClient.writeContract({
+      address: usdcAddress,
+      abi: MOCK_USDC_ABI,
+      functionName: 'mint',
+      args: [address, amountBigInt],
+      account
+    });
+
+    logger.info(`Faucet: Mint tx submitted: ${hash}`);
+
+    // Wait for the transaction to be mined (confirmed)
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+
+    if (receipt.status === 'reverted') {
+      throw new Error('Transaction reverted on chain.');
+    }
+
+    logger.info(`Faucet: Successfully minted and transaction confirmed: ${hash}`);
+
+    res.json({
+      success: true,
+      txHash: hash,
+      message: `Successfully minted ${numericAmount} USDC to ${address}`
+    });
+  } catch (error) {
+    logger.error('Faucet minting failed:', error);
     res.status(500).json({ error: error.message });
   }
 });

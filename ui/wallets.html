@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Identity Wallets - CRATS Blockchain Explorer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <div class="nav-container">
+      <a href="/dashboard.html" class="logo-link" id="header-logo"><div class="logo-icon">C</div>CRATS Explorer</a>
+      <nav>
+        <ul>
+          <li><a href="/dashboard.html" id="nav-dashboard">Dashboard</a></li>
+          <li><a href="/blocks.html" id="nav-blocks">Blocks</a></li>
+          <li><a href="/transactions.html" id="nav-transactions">Transactions</a></li>
+          <li><a href="/contracts.html" id="nav-contracts">Contracts</a></li>
+          <li><a href="/assets.html" id="nav-assets">Assets</a></li>
+          <li><a href="/events.html" id="nav-events">Events</a></li>
+          <li><a href="/vaults.html" id="nav-vaults">Vaults</a></li>
+          <li><a href="/wallets.html" class="active" id="nav-wallets">Identity Wallets</a></li>
+          <li><a href="/faucet.html" id="nav-faucet">Faucet</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <section class="search-section" style="padding: 1.5rem;">
+    <form class="search-form" id="search-form-wallets">
+      <div class="search-bar" style="max-width: 600px;">
+        <input type="text" placeholder="Search by registered wallet address, tx hash, or block number" required>
+        <button type="submit">Search</button>
+      </div>
+    </form>
+  </section>
+
+  <main>
+    <div class="page-header-row">
+      <div>
+        <h1 class="page-title">Identity Wallets</h1>
+        <p class="page-subtitle">Wallets registered in CRATS IdentityRegistry with indexed on-chain balances.</p>
+      </div>
+      <span class="table-count" id="wallets-count">Loading wallets…</span>
+    </div>
+
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr><th>Holder</th><th>Wallet</th><th>Role</th><th>DID</th><th>Balances</th><th>Updated</th></tr>
+        </thead>
+        <tbody id="wallets-table-body"></tbody>
+      </table>
+    </div>
+    <div class="pagination-container">
+      <span class="pagination-info" id="wallets-page-num"></span>
+      <div class="pagination-controls">
+        <button class="btn-page" id="wallets-prev">Previous</button>
+        <button class="btn-page" id="wallets-next">Next</button>
+      </div>
+    </div>
+  </main>
+
+  <footer><p>&copy; 2026 CRATS Protocol Indexer &amp; Explorer.</p></footer>
+  <script src="app.js"></script>
+</body>
+</html>

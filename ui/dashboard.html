@@ -25,6 +25,8 @@
           <li><a href="/assets.html" id="nav-assets">Assets</a></li>
           <li><a href="/events.html" id="nav-events">Events</a></li>
           <li><a href="/vaults.html" id="nav-vaults">Vaults</a></li>
+          <li><a href="/wallets.html" id="nav-wallets">Identity Wallets</a></li>
+          <li><a href="/faucet.html" id="nav-faucet">Faucet</a></li>
         </ul>
       </nav>
     </div>
@@ -145,6 +147,15 @@
         <div class="stat-value" id="stat-total-events">—</div>
         <div class="stat-footer">Immutable event ledger</div>
       </div>
+
+      <div class="stat-card" id="card-identity-wallets">
+        <div class="stat-header">
+          <span>Identity Wallets</span>
+          <span class="stat-icon" style="color: var(--success);">◉</span>
+        </div>
+        <div class="stat-value" id="stat-identity-wallets">—</div>
+        <div class="stat-footer">Registered in IdentityRegistry</div>
+      </div>
     </div>
 
     <!-- Dashboard Columns (Recent blocks & Recent Tx) -->
@@ -167,6 +178,29 @@
         <div class="feed-list" id="recent-tx-body"></div>
       </div>
     </div>
+
+    <section class="column-card" id="col-identity-wallets" style="margin-top: 1.5rem;">
+      <div class="column-header">
+        <div>
+          <h2 class="column-title">Identity Wallets &amp; Indexed Balances</h2>
+          <p class="table-count">Wallets registered on-chain through CRATS IdentityRegistry</p>
+        </div>
+      </div>
+      <div class="table-container wallet-dashboard-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Holder</th>
+              <th>Wallet</th>
+              <th>Role</th>
+              <th>Indexed Balances</th>
+              <th>Last Updated</th>
+            </tr>
+          </thead>
+          <tbody id="identity-wallets-body"></tbody>
+        </table>
+      </div>
+    </section>
   </main>
 
   <!-- Sticky Footer -->

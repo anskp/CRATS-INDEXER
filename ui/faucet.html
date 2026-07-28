@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="CRATS Blockchain Explorer — Mock USDC Faucet">
+  <title>USDC Faucet - CRATS Blockchain Explorer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <header>
+    <div class="nav-container">
+      <a href="/dashboard.html" class="logo-link" id="header-logo">
+        <div class="logo-icon">C</div>
+        CRATS Explorer
+      </a>
+      <nav>
+        <ul>
+          <li><a href="/dashboard.html"    id="nav-dashboard">Dashboard</a></li>
+          <li><a href="/blocks.html"       id="nav-blocks">Blocks</a></li>
+          <li><a href="/transactions.html" id="nav-transactions">Transactions</a></li>
+          <li><a href="/events.html"       id="nav-events">Events</a></li>
+          <li><a href="/vaults.html"       id="nav-vaults">Vaults</a></li>
+          <li><a href="/contracts.html"    id="nav-contracts">Contracts</a></li>
+          <li><a href="/assets.html"       id="nav-assets">Assets</a></li>
+          <li><a href="/wallets.html"      id="nav-wallets">Identity Wallets</a></li>
+          <li><a href="/faucet.html"       id="nav-faucet" class="active">Faucet</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <section class="search-section">
+    <form class="search-form" id="search-form-faucet">
+      <div class="search-bar">
+        <input type="text" placeholder="Search by Wallet Address / Tx Hash / Block Number / Contract Address / Symbol..." required id="search-input-faucet">
+        <button type="submit" id="search-submit-faucet">Search</button>
+      </div>
+    </form>
+  </section>
+
+  <main>
+    <div class="page-header-row">
+      <div>
+        <h1 class="page-title">Mock USDC Faucet</h1>
+        <p class="page-subtitle">Mint testnet Mock USDC to any wallet on the Sepolia network.</p>
+      </div>
+    </div>
+
+    <!-- Faucet Form Container -->
+    <div class="faucet-container">
+      <h2 class="faucet-title">Request Mock USDC</h2>
+      <p class="faucet-subtitle">Provide a Sepolia wallet address and amount to mint Mock USDC. Minted tokens will be indexed and reflected in the wallet dashboard.</p>
+      
+      <form id="faucet-mint-form">
+        <div class="faucet-form-group">
+          <label for="receiver-address">Receiver Wallet Address</label>
+          <input type="text" id="receiver-address" class="faucet-input" placeholder="0x..." required pattern="^0x[a-fA-F0-9]{40}$" title="Must be a valid 40-character hex address starting with 0x">
+        </div>
+
+        <div class="faucet-form-group">
+          <label for="mint-amount">Amount (USDC)</label>
+          <input type="number" id="mint-amount" class="faucet-input" value="1000" min="1" step="any" required>
+        </div>
+
+        <button type="submit" id="faucet-submit-btn" class="faucet-btn">
+          <span>Mint USDC</span>
+        </button>
+      </form>
+
+      <!-- Status Indicator -->
+      <div id="faucet-status-box" class="faucet-status"></div>
+    </div>
+
+    <!-- Faucet Info Card -->
+    <div class="faucet-info-card">
+      <div class="faucet-info-row">
+        <span class="faucet-info-label">USDC Contract Address:</span>
+        <span id="info-usdc-address" class="faucet-info-value">Loading...</span>
+      </div>
+      <div class="faucet-info-row">
+        <span class="faucet-info-label">Faucet Signer Address:</span>
+        <span id="info-faucet-address" class="faucet-info-value">Loading...</span>
+      </div>
+      <div class="faucet-info-row">
+        <span class="faucet-info-label">Network:</span>
+        <span class="faucet-info-value" style="color:var(--success);">Sepolia Testnet (Chain ID 11155111)</span>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <p>&copy; 2026 CRATS Protocol Indexer &amp; Explorer. Phase 3 Production Release.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

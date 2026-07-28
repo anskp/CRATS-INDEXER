@@ -6,6 +6,9 @@ import { projectFee } from '../projections/feeProjection.js';
 import { projectSettlement } from '../projections/settlementProjection.js';
 import { projectNAV } from '../projections/navProjection.js';
 import { projectAnalytics } from '../projections/analyticsProjection.js';
+import { projectWallet } from '../projections/walletProjection.js';
+import { projectBeneficialOwnership } from '../projections/borProjection.js';
+import { projectCarbonRetirement } from '../projections/carbonProjection.js';
 
 const PROJECTIONS_MAP = {
   portfolio: {
@@ -54,6 +57,35 @@ const PROJECTIONS_MAP = {
     clear: async (tx) => {
       logger.info('Clearing protocol metrics...');
       await tx.protocolMetric.deleteMany({});
+    }
+  },
+  wallet: {
+    name: 'Wallet',
+    fn: projectWallet,
+    clear: async (tx) => {
+      logger.info('Clearing tracked wallets and balances...');
+      await tx.walletBalance.deleteMany({});
+      await tx.walletComplianceState.deleteMany({});
+      await tx.trackedWallet.deleteMany({});
+    }
+  },
+  bor: {
+    name: 'BOR',
+    fn: projectBeneficialOwnership,
+    clear: async (tx) => {
+      logger.info('Clearing beneficial owner records and P2P logs...');
+      await tx.beneficialOwnerRecord.deleteMany({});
+      await tx.p2pSettlementLog.deleteMany({});
+    }
+  },
+  carbon: {
+    name: 'Carbon',
+    fn: projectCarbonRetirement,
+    clear: async (tx) => {
+      logger.info('Clearing carbon retirement records, metadata and batches...');
+      await tx.carbonRetirementRecord.deleteMany({});
+      await tx.carbonAssetMetadata.deleteMany({});
+      await tx.carbonBatch.deleteMany({});
     }
   }
 };

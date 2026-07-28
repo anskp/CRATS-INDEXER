@@ -49,6 +49,17 @@ export const OrderBookEngineABI = loadAbi('market/OrderBookEngine.sol/OrderBookE
 export const SettlementEngineABI = loadAbi('market/SettlementEngine.sol/SettlementEngine.json');
 export const ClearingHouseABI = loadAbi('market/ClearingHouse.sol/ClearingHouse.json');
 export const TimelockABI = loadAbi('contracts/governance/TimelockController.sol/TimelockController.json', true);
+export const DMSRegistryABI = loadAbi('asset/DMSRegistry.sol/DMSRegistry.json');
+export const SyncManagerABI = loadAbi('asset/OwnershipSyncManager.sol/OwnershipSyncManager.json');
+export const CarbonCreditPluginABI = loadAbi('asset/plugins/CarbonCreditPlugin.sol/CarbonCreditPlugin.json');
+export const CarbonRetirementPluginABI = loadAbi('asset/plugins/CarbonRetirementPlugin.sol/CarbonRetirementPlugin.json');
+export const FineArtPluginABI = loadAbi('asset/plugins/FineArtPlugin.sol/FineArtPlugin.json');
+export const CarbonMetadataStoreABI = loadAbi('asset/carbon/CarbonAssetMetadataStore.sol/CarbonAssetMetadataStore.json');
+export const CarbonBatchManagerABI = loadAbi('asset/carbon/CarbonBatchManager.sol/CarbonBatchManager.json');
+export const CarbonRetirementManagerABI = loadAbi('financial/CarbonRetirementManager.sol/CarbonRetirementManager.json');
+export const GovernanceMultisigABI = loadAbi('financial/GovernanceMultisig.sol/GovernanceMultisig.json');
+export const LifecycleExitManagerABI = loadAbi('financial/LifecycleExitManager.sol/LifecycleExitManager.json');
+export const RedemptionManagerABI = loadAbi('financial/RedemptionManager.sol/RedemptionManager.json');
 
 // Standard ERC-20 ABI events
 export const ERC20ABI = [
@@ -96,7 +107,18 @@ export const ABIMap = {
   [process.env.CLEARING_HOUSE?.toLowerCase()]: ClearingHouseABI,
   [process.env.TIMELOCK?.toLowerCase()]: TimelockABI,
   [process.env.USDC?.toLowerCase()]: ERC20ABI,
-  [process.env.USDT?.toLowerCase()]: ERC20ABI
+  [process.env.USDT?.toLowerCase()]: ERC20ABI,
+  [process.env.DMS_REGISTRY?.toLowerCase()]: DMSRegistryABI,
+  [process.env.SYNC_MANAGER?.toLowerCase()]: SyncManagerABI,
+  [process.env.CARBON_CREDIT_PLUGIN?.toLowerCase()]: CarbonCreditPluginABI,
+  [process.env.CARBON_RETIREMENT_PLUGIN?.toLowerCase()]: CarbonRetirementPluginABI,
+  [process.env.FINE_ART_PLUGIN?.toLowerCase()]: FineArtPluginABI,
+  [process.env.CARBON_METADATA_STORE?.toLowerCase()]: CarbonMetadataStoreABI,
+  [process.env.CARBON_BATCH_MANAGER?.toLowerCase()]: CarbonBatchManagerABI,
+  [process.env.CARBON_RETIREMENT_MANAGER?.toLowerCase()]: CarbonRetirementManagerABI,
+  [process.env.GOVERNANCE_MULTISIG?.toLowerCase()]: GovernanceMultisigABI,
+  [process.env.LIFECYCLE_EXIT_MANAGER?.toLowerCase()]: LifecycleExitManagerABI,
+  [process.env.REDEMPTION_MANAGER?.toLowerCase()]: RedemptionManagerABI
 };
 
 logger.info('Contract ABIs registry loaded successfully.');

@@ -1,13 +1,45 @@
 import publicClient from '../config/viem.js';
+import { decodeEventLog } from 'viem';
 import prisma from '../config/db.js';
 import logger from '../config/logger.js';
 import { isTracked, decodeLog, registerContract, initializeABIRegistry } from './eventDecoder.js';
 import * as ABIs from '../config/contractABIs.js';
+import { projectNativeTransfer } from '../projections/walletProjection.js';
 
 let isSyncing = false;
 let syncTimeout = null;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function decodeWalletRelevantLog(log, tx) {
+  if (isTracked(log.address)) {
+    return decodeLog(log);
+  }
+
+  try {
+    const decoded = decodeEventLog({
+      abi: ABIs.ERC20ABI,
+      data: log.data,
+      topics: log.topics
+    });
+    if (decoded.eventName !== 'Transfer') return null;
+
+    const from = decoded.args.from?.toLowerCase();
+    const to = decoded.args.to?.toLowerCase();
+    const watchedWallet = await tx.trackedWallet.findFirst({
+      where: { walletAddress: { in: [from, to].filter(Boolean) } },
+      select: { id: true }
+    });
+
+    return watchedWallet ? {
+      eventName: decoded.eventName,
+      args: decoded.args,
+      contractLabel: 'External ERC-20'
+    } : null;
+  } catch {
+    return null;
+  }
+}
 
 async function callWithRetry(fn, retries = 5, delayMs = 1500) {
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -231,6 +263,14 @@ async function runSyncLoop() {
             }
           });
 
+          await projectNativeTransfer({
+            fromAddress: rawTx.from,
+            toAddress: rawTx.to,
+            value: rawTx.value,
+            blockNumber: BigInt(nextBlockToSync),
+            txHash: rawTx.hash
+          }, tx);
+
           // Save raw logs & events
           for (const log of receipt.logs) {
             await tx.log.upsert({
@@ -255,9 +295,8 @@ async function runSyncLoop() {
               }
             });
 
-            if (isTracked(log.address)) {
-              const decoded = decodeLog(log);
-              if (decoded) {
+            const decoded = await decodeWalletRelevantLog(log, tx);
+            if (decoded) {
                 const eventPayload = serializeBigInts(decoded.args);
                 await tx.blockchainEvent.upsert({
                   where: {
@@ -299,7 +338,13 @@ async function runSyncLoop() {
                     registerContract(vaultAddress, abi, label);
                   }
                 }
-              }
+
+                if (decoded.eventName === 'AssetCreated') {
+                  const tokenAddress = decoded.args.token;
+                  if (tokenAddress) {
+                    registerContract(tokenAddress, ABIs.ERC20ABI, 'AssetToken');
+                  }
+                }
             }
           }
         }

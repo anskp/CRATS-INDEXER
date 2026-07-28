@@ -7,6 +7,22 @@ function formatAddress(address, length = 6) {
   return `${address.substring(0, 2 + length)}...${address.substring(address.length - length)}`;
 }
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>'"]/g, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    "'": '&#39;',
+    '"': '&quot;'
+  }[character]));
+}
+
+function formatTokenBalance(balance) {
+  const numericBalance = Number(balance);
+  if (!Number.isFinite(numericBalance)) return String(balance);
+  return numericBalance.toLocaleString(undefined, { maximumFractionDigits: 6 });
+}
+
 function formatWei(weiString, decimals = 18) {
   if (!weiString || weiString === '0') return '0 ETH';
   try {
@@ -153,11 +169,15 @@ function showLoading(elementId) {
 async function loadDashboard() {
   showLoading('recent-blocks-body');
   showLoading('recent-tx-body');
+  showLoading('identity-wallets-body');
 
   try {
-    const res = await fetch(`${API_BASE}/dashboard`);
-    if (!res.ok) throw new Error('Failed to fetch dashboard data');
-    const data = await res.json();
+    const [dashboardRes, walletsRes] = await Promise.all([
+      fetch(`${API_BASE}/dashboard`),
+      fetch(`${API_BASE}/wallets?limit=8`)
+    ]);
+    if (!dashboardRes.ok || !walletsRes.ok) throw new Error('Failed to fetch dashboard data');
+    const [data, walletResult] = await Promise.all([dashboardRes.json(), walletsRes.json()]);
 
     // Populate stats
     document.getElementById('stat-latest-block').innerText = data.latestBlock;
@@ -167,6 +187,7 @@ async function loadDashboard() {
     document.getElementById('stat-total-vaults').innerText = data.totalVaults;
     document.getElementById('stat-total-events').innerText = data.totalEvents;
     document.getElementById('stat-sync-percentage').innerText = `${parseFloat(data.progressPercentage || 0).toFixed(2)}%`;
+    document.getElementById('stat-identity-wallets').innerText = Number(walletResult.total).toLocaleString();
 
     // Populate recent blocks list
     const blocksBody = document.getElementById('recent-blocks-body');
@@ -222,6 +243,27 @@ async function loadDashboard() {
           </div>
         `;
       });
+    }
+
+    const walletsBody = document.getElementById('identity-wallets-body');
+    if (walletResult.data.length === 0) {
+      walletsBody.innerHTML = '<tr><td colspan="5" class="empty-state">No identity wallets have been indexed yet.</td></tr>';
+    } else {
+      walletsBody.innerHTML = walletResult.data.map((wallet) => {
+        const holder = wallet.handle || wallet.holderName || wallet.displayName || 'Unnamed holder';
+        const balances = wallet.balances?.length
+          ? wallet.balances.map((balance) => `${escapeHtml(balance.tokenSymbol)} ${formatTokenBalance(balance.balance)}`).join(' · ')
+          : 'Waiting for first balance update';
+        return `
+          <tr>
+            <td><strong>${escapeHtml(holder)}</strong></td>
+            <td><a href="/wallet.html?address=${wallet.walletAddress}" class="address-link">${formatAddress(wallet.walletAddress, 10)}</a></td>
+            <td><span class="badge badge-info">${escapeHtml(wallet.role || 'UNASSIGNED')}</span></td>
+            <td class="wallet-balance-summary">${balances}</td>
+            <td>${getRelativeTime(wallet.updatedAt)}</td>
+          </tr>
+        `;
+      }).join('');
     }
   } catch (error) {
     showToast(error.message);
@@ -655,7 +697,50 @@ async function loadWalletDetails() {
     const w = await res.json();
 
     const container = document.getElementById('wallet-details-container');
+    const identity = w.identity;
+    const identityCard = identity ? `
+      <div class="detail-card">
+        <div class="section-heading-row">
+          <div>
+            <h3>On-Chain Identity</h3>
+            <p class="table-count">Resolved from CRATS IdentityRegistry</p>
+          </div>
+          <span class="badge badge-success">Verified Identity</span>
+        </div>
+        <div class="identity-profile-grid">
+          <div><span>Holder</span><strong>${escapeHtml(identity.handle || identity.holderName || identity.displayName || 'Unnamed holder')}</strong></div>
+          <div><span>Role</span><strong>${escapeHtml(identity.role || 'Unassigned')}</strong></div>
+          <div><span>DID</span><strong class="identity-did">${escapeHtml(identity.did || 'Legacy identity')}</strong></div>
+          <div><span>Identity SBT</span><strong>#${escapeHtml(identity.identityTokenId || '—')}</strong></div>
+        </div>
+      </div>
+    ` : '';
+
+    const indexedBalances = w.balances?.length ? `
+      <div class="table-container" style="margin-bottom: 2rem;">
+        <table>
+          <thead>
+            <tr><th>Asset</th><th>Type</th><th>Balance</th><th>Token Address</th><th>Last Updated</th></tr>
+          </thead>
+          <tbody>
+            ${w.balances.map((balance) => `
+              <tr>
+                <td><strong>${escapeHtml(balance.tokenName)}</strong><div class="feed-sub">${escapeHtml(balance.tokenSymbol)}</div></td>
+                <td><span class="badge badge-gray">${escapeHtml(balance.tokenType)}</span></td>
+                <td style="font-family:monospace;font-weight:600;">${formatTokenBalance(balance.balance)}</td>
+                <td>${balance.tokenAddress === 'NATIVE' ? 'Native ETH' : `<a href="/contract.html?address=${balance.tokenAddress}" class="tx-hash">${formatAddress(balance.tokenAddress, 8)}</a>`}</td>
+                <td>${getRelativeTime(balance.lastUpdated)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    ` : `
+      <div class="empty-state wallet-empty-state">This identity wallet is registered. Balances will appear after the first indexed transfer or native balance refresh.</div>
+    `;
+
     container.innerHTML = `
+      ${identityCard}
       <div class="stats-grid" style="margin-bottom: 1.5rem;">
         <div class="stat-card">
           <div class="stat-header">Wallet Balance (Estimated)</div>
@@ -678,6 +763,9 @@ async function loadWalletDetails() {
           </div>
         </div>
       </div>
+
+      <h3 style="margin-bottom: 1rem;">Indexed On-Chain Balances</h3>
+      ${indexedBalances}
 
       <h3 style="margin-bottom: 1rem;">Asset Portfolio Holdings</h3>
       <div class="table-container" style="margin-bottom: 2rem;">
@@ -743,6 +831,48 @@ async function loadWalletDetails() {
         `;
       });
     }
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+// ─── Identity Wallets Page Controller ─────────────────────────
+let currentWalletsPage = 1;
+async function loadIdentityWallets(page = 1) {
+  showLoading('wallets-table-body');
+  try {
+    const response = await fetch(`${API_BASE}/wallets?page=${page}&limit=15`);
+    if (!response.ok) throw new Error('Failed to load identity wallets');
+    const result = await response.json();
+    const body = document.getElementById('wallets-table-body');
+    const count = document.getElementById('wallets-count');
+
+    count.innerText = `${Number(result.total).toLocaleString()} registered wallet${result.total === 1 ? '' : 's'}`;
+    if (result.data.length === 0) {
+      body.innerHTML = '<tr><td colspan="6" class="empty-state">No wallets have been registered in the IdentityRegistry yet.</td></tr>';
+    } else {
+      body.innerHTML = result.data.map((wallet) => {
+        const holder = wallet.handle || wallet.holderName || wallet.displayName || 'Unnamed holder';
+        const balances = wallet.balances?.length
+          ? wallet.balances.map((balance) => `${escapeHtml(balance.tokenSymbol)} ${formatTokenBalance(balance.balance)}`).join('<br>')
+          : '<span class="feed-sub">No indexed balances yet</span>';
+        return `
+          <tr>
+            <td><strong>${escapeHtml(holder)}</strong><div class="feed-sub">${escapeHtml(wallet.holderName || '')}</div></td>
+            <td><a href="/wallet.html?address=${wallet.walletAddress}" class="address-link">${formatAddress(wallet.walletAddress, 10)}</a></td>
+            <td><span class="badge badge-info">${escapeHtml(wallet.role || 'UNASSIGNED')}</span></td>
+            <td class="identity-did">${escapeHtml(wallet.did || 'Legacy identity')}</td>
+            <td class="wallet-balance-summary">${balances}</td>
+            <td>${getRelativeTime(wallet.updatedAt)}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    document.getElementById('wallets-prev').disabled = page <= 1;
+    document.getElementById('wallets-next').disabled = page >= result.totalPages;
+    document.getElementById('wallets-page-num').innerText = `Page ${page} of ${result.totalPages || 1}`;
+    currentWalletsPage = page;
   } catch (error) {
     showToast(error.message);
   }
@@ -1312,6 +1442,95 @@ async function loadVaultEvents(address) {
   } catch (e) { el.innerHTML = '<div class="empty-state">Failed to load vault events.</div>'; }
 }
 
+// ─── Faucet Page Controller ───────────────────────────────────
+async function loadFaucetPage() {
+  const usdcAddrEl = document.getElementById('info-usdc-address');
+  const faucetAddrEl = document.getElementById('info-faucet-address');
+  const form = document.getElementById('faucet-mint-form');
+  const submitBtn = document.getElementById('faucet-submit-btn');
+  const statusBox = document.getElementById('faucet-status-box');
+
+  // Fetch Faucet Configuration on Load
+  try {
+    const res = await fetch(`${API_BASE}/faucet/config`);
+    if (!res.ok) throw new Error('Failed to load faucet config');
+    const data = await res.json();
+    if (usdcAddrEl) usdcAddrEl.innerText = data.usdcAddress;
+    if (faucetAddrEl) faucetAddrEl.innerText = data.faucetAddress;
+  } catch (error) {
+    if (usdcAddrEl) usdcAddrEl.innerText = 'Error loading contract address';
+    if (faucetAddrEl) faucetAddrEl.innerText = 'Error loading faucet address';
+    showToast(error.message);
+  }
+
+  // Handle Form Submission
+  if (form) {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const receiver = document.getElementById('receiver-address').value.trim();
+      const amount = document.getElementById('mint-amount').value.trim();
+
+      if (!receiver || !amount) return;
+
+      // Reset and display status box
+      statusBox.style.display = 'block';
+      statusBox.className = 'faucet-status'; // reset classes
+      statusBox.innerHTML = `
+        <div style="display:flex;align-items:center;gap:0.75rem;">
+          <div class="sync-spinner"></div>
+          <span>Submitting transaction to Sepolia testnet... This may take a few seconds.</span>
+        </div>
+      `;
+
+      // Disable inputs and button
+      const inputs = form.querySelectorAll('input');
+      inputs.forEach(input => input.disabled = true);
+      submitBtn.disabled = true;
+      submitBtn.querySelector('span').innerText = 'Minting...';
+
+      try {
+        const res = await fetch(`${API_BASE}/faucet/mint`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address: receiver, amount: amount })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.error || 'Faucet minting failed');
+        }
+
+        // Show Success
+        statusBox.classList.add('faucet-status-success');
+        statusBox.innerHTML = `
+          <strong>Success!</strong> Minted <strong>${amount} USDC</strong> to <strong>${formatAddress(receiver, 8)}</strong>.<br>
+          <div style="margin-top:0.75rem; display:flex; flex-direction:column; gap:0.35rem;">
+            <span>Transaction Hash: <span style="font-family:monospace; font-size:0.9rem; word-break:break-all;">${data.txHash}</span></span>
+            <div style="margin-top:0.25rem;">
+              <a href="/transaction.html?hash=${data.txHash}" class="tx-hash" style="color:var(--success);text-decoration:underline;margin-right:1.25rem;">View in Indexer</a>
+              <a href="https://sepolia.etherscan.io/tx/${data.txHash}" target="_blank" rel="noopener noreferrer" style="color:#60A5FA;text-decoration:underline;">View on Etherscan (Sepolia)</a>
+            </div>
+          </div>
+        `;
+        
+        // Reset amount field only, retain address for convenience
+        document.getElementById('mint-amount').value = '1000';
+      } catch (error) {
+        // Show Error
+        statusBox.classList.add('faucet-status-error');
+        statusBox.innerHTML = `<strong>Error:</strong> ${error.message}`;
+      } finally {
+        // Re-enable inputs
+        inputs.forEach(input => input.disabled = false);
+        submitBtn.disabled = false;
+        submitBtn.querySelector('span').innerText = 'Mint USDC';
+      }
+    });
+  }
+}
+
 // Router to identify page and run matching controllers
 document.addEventListener('DOMContentLoaded', () => {
   initSearch();
@@ -1339,6 +1558,10 @@ document.addEventListener('DOMContentLoaded', () => {
     loadContractDetails();
   } else if (path.endsWith('/wallet.html')) {
     loadWalletDetails();
+  } else if (path.endsWith('/wallets.html')) {
+    loadIdentityWallets(1);
+    document.getElementById('wallets-prev').addEventListener('click', () => loadIdentityWallets(currentWalletsPage - 1));
+    document.getElementById('wallets-next').addEventListener('click', () => loadIdentityWallets(currentWalletsPage + 1));
   } else if (path.endsWith('/assets.html')) {
     loadAssetsList();
   } else if (path.endsWith('/asset.html')) {
@@ -1351,5 +1574,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadVaultsList();
   } else if (path.endsWith('/vault.html')) {
     loadVaultDetail();
+  } else if (path.endsWith('/faucet.html')) {
+    loadFaucetPage();
   }
 });

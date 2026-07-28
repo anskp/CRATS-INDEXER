@@ -265,6 +265,51 @@ model SbtIdentity {
   @@map("sbt_identities")
 }
 
+/// Wallets owned by identities registered in the CRATS IdentityRegistry.
+/// This is the indexer's watchlist; it never depends on COPYm's application DB.
+model TrackedWallet {
+  id                  Int             @id @default(autoincrement())
+  walletAddress       String          @unique @map("wallet_address")
+  chainId             Int             @map("chain_id")
+  holderName          String?         @map("holder_name")
+  handle              String?         @map("handle")
+  displayName         String?         @map("display_name")
+  did                 String?         @db.Text
+  role                String?         @map("role")
+  jurisdiction        Int?            @map("jurisdiction")
+  identityTokenId     String?         @map("identity_token_id")
+  registrationBlock   BigInt?         @map("registration_block")
+  registrationTxHash  String?         @map("registration_tx_hash")
+  registeredAt        DateTime?       @map("registered_at")
+  createdAt           DateTime        @default(now()) @map("created_at")
+  updatedAt           DateTime        @updatedAt @map("updated_at")
+  balances            WalletBalance[]
+
+  @@index([chainId])
+  @@index([handle])
+  @@map("tracked_wallets")
+}
+
+/// Current on-chain balances for every tracked identity wallet.
+model WalletBalance {
+  id                Int           @id @default(autoincrement())
+  trackedWalletId   Int           @map("tracked_wallet_id")
+  tokenAddress      String        @map("token_address")
+  tokenName         String        @map("token_name")
+  tokenSymbol       String        @map("token_symbol")
+  tokenType         String        @map("token_type") // NATIVE / ERC20 / VAULT_SHARE
+  decimals          Int           @default(18)
+  balance           Decimal       @default(0) @db.Decimal(30, 18)
+  lastUpdatedBlock  BigInt?       @map("last_updated_block")
+  lastUpdatedTxHash String?       @map("last_updated_tx_hash")
+  lastUpdated       DateTime      @updatedAt @map("last_updated")
+  trackedWallet     TrackedWallet @relation(fields: [trackedWalletId], references: [id], onDelete: Cascade)
+
+  @@unique([trackedWalletId, tokenAddress])
+  @@index([tokenAddress])
+  @@map("wallet_balances")
+}
+
 model WalletComplianceState {
   id              Int      @id @default(autoincrement())
   walletAddress   String   @map("wallet_address")

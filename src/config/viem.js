@@ -1,4 +1,5 @@
-import { createPublicClient, http, fallback } from 'viem';
+import { createPublicClient, createWalletClient, http, fallback } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { sepolia } from 'viem/chains';
 import logger from './logger.js';
 import dotenv from 'dotenv';
@@ -30,4 +31,21 @@ const publicClient = createPublicClient({
   }),
 });
 
+export const getWalletClient = () => {
+  const privateKey = process.env.PRIVATE_KEY;
+  if (!privateKey) {
+    throw new Error('PRIVATE_KEY not configured in .env');
+  }
+  const account = privateKeyToAccount(privateKey);
+  return createWalletClient({
+    account,
+    chain: sepolia,
+    transport: fallback(transports, {
+      rank: true,
+    }),
+  });
+};
+
 export default publicClient;
+export { publicClient };
+

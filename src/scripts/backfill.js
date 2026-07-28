@@ -2,7 +2,7 @@ import 'dotenv/config';
 import prisma from '../config/db.js';
 import publicClient from '../config/viem.js';
 import logger from '../config/logger.js';
-import { isTracked, decodeLog, registerContract, initializeABIRegistry } from '../sync/eventDecoder.js';
+import { isTracked, decodeLog, registerContract, initializeABIRegistry, getTrackedAddresses } from '../sync/eventDecoder.js';
 import * as ABIs from '../config/contractABIs.js';
 import { Decimal } from '@prisma/client/runtime/library.js';
 
@@ -50,31 +50,7 @@ async function main() {
     initializeABIRegistry();
 
     // 1. Resolve starting list of contract addresses
-    const staticAddresses = [
-      process.env.IDENTITY_REGISTRY,
-      process.env.IDENTITY_SBT,
-      process.env.KYC_REGISTRY,
-      process.env.COMPLIANCE_MODULE,
-      process.env.TRAVEL_RULE_MODULE,
-      process.env.INVESTOR_RIGHTS_REGISTRY,
-      process.env.CIRCUIT_BREAKER,
-      process.env.ASSET_FACTORY,
-      process.env.ASSET_REGISTRY,
-      process.env.REAL_ESTATE_PLUGIN,
-      process.env.VAULT_FACTORY,
-      process.env.YIELD_DISTRIBUTOR,
-      process.env.USDC,
-      process.env.USDT,
-      process.env.FEE_ENGINE,
-      process.env.NAV_ORACLE,
-      process.env.PRICE_ORACLE,
-      process.env.MARKETPLACE_FACTORY,
-      process.env.ORDER_BOOK_ENGINE,
-      process.env.SETTLEMENT_ENGINE,
-      process.env.CLEARING_HOUSE,
-      process.env.TIMELOCK,
-      process.env.REDEMPTION_MANAGER
-    ].filter(Boolean).map(a => a.toLowerCase());
+    const staticAddresses = getTrackedAddresses().map(a => a.toLowerCase());
 
     const addressesToQuery = new Set(staticAddresses);
 

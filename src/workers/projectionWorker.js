@@ -8,6 +8,9 @@ import { projectFee } from '../projections/feeProjection.js';
 import { projectSettlement } from '../projections/settlementProjection.js';
 import { projectNAV } from '../projections/navProjection.js';
 import { projectAnalytics } from '../projections/analyticsProjection.js';
+import { projectWallet } from '../projections/walletProjection.js';
+import { projectBeneficialOwnership } from '../projections/borProjection.js';
+import { projectCarbonRetirement } from '../projections/carbonProjection.js';
 
 const PROJECTIONS = [
   { name: 'Portfolio', fn: projectPortfolio },
@@ -15,7 +18,10 @@ const PROJECTIONS = [
   { name: 'Fee', fn: projectFee },
   { name: 'Settlement', fn: projectSettlement },
   { name: 'NAV', fn: projectNAV },
-  { name: 'Analytics', fn: projectAnalytics }
+  { name: 'Analytics', fn: projectAnalytics },
+  { name: 'Wallet', fn: projectWallet },
+  { name: 'BOR', fn: projectBeneficialOwnership },
+  { name: 'Carbon', fn: projectCarbonRetirement }
 ];
 
 let workerRunning = false;
